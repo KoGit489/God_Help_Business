@@ -1,0 +1,14 @@
+C:\Users\kofor\FastTraining\bin\Debug\net10.0\FastTraining.exe
+C:\Users\kofor\FastTraining\bin\Debug\net10.0\FastTraining.deps.json
+C:\Users\kofor\FastTraining\bin\Debug\net10.0\FastTraining.runtimeconfig.json
+C:\Users\kofor\FastTraining\bin\Debug\net10.0\FastTraining.dll
+C:\Users\kofor\FastTraining\bin\Debug\net10.0\FastTraining.pdb
+C:\Users\kofor\FastTraining\obj\Debug\net10.0\FastTraining.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\kofor\FastTraining\obj\Debug\net10.0\FastTraining.AssemblyInfoInputs.cache
+C:\Users\kofor\FastTraining\obj\Debug\net10.0\FastTraining.AssemblyInfo.cs
+C:\Users\kofor\FastTraining\obj\Debug\net10.0\FastTraining.csproj.CoreCompileInputs.cache
+C:\Users\kofor\FastTraining\obj\Debug\net10.0\FastTraining.dll
+C:\Users\kofor\FastTraining\obj\Debug\net10.0\refint\FastTraining.dll
+C:\Users\kofor\FastTraining\obj\Debug\net10.0\FastTraining.pdb
+C:\Users\kofor\FastTraining\obj\Debug\net10.0\FastTraining.genruntimeconfig.cache
+C:\Users\kofor\FastTraining\obj\Debug\net10.0\ref\FastTraining.dll
