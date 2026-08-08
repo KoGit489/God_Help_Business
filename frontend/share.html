@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Shared Review</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 2rem; background: #f8fafc; color: #0f172a; }
+      .card { max-width: 760px; margin: 0 auto; padding: 1.25rem; background: white; border-radius: 16px; box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08); }
+      .pill { display: inline-block; padding: 0.35rem 0.6rem; border-radius: 999px; background: #ecfeff; color: #0f766e; font-size: 0.9rem; }
+      .panel { margin-top: 1rem; padding: 1rem; border: 1px solid #e2e8f0; border-radius: 12px; background: #fcfdff; }
+      ul { padding-left: 1.2rem; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <div class="pill">Shared project review</div>
+      <h1 id="title">Loading shared project...</h1>
+      <p id="description" class="muted"></p>
+      <div class="panel">
+        <h2>Captured evidence</h2>
+        <ul id="pins"></ul>
+      </div>
+    </div>
+    <script>
+      const apiBase = 'http://127.0.0.1:8000';
+      const token = window.location.pathname.split('/').pop();
+
+      async function loadSharedProject() {
+        const response = await fetch(`${apiBase}/share/${token}`);
+        if (!response.ok) {
+          document.getElementById('title').textContent = 'This review link is not available.';
+          return;
+        }
+        const project = await response.json();
+        document.getElementById('title').textContent = project.title;
+        document.getElementById('description').textContent = project.description || 'No description provided.';
+        const pins = document.getElementById('pins');
+        if (!project.pins.length) {
+          pins.innerHTML = '<li>No evidence has been captured for this project yet.</li>';
+          return;
+        }
+        pins.innerHTML = project.pins.map((pin) => `<li><strong>${pin.captured_on}</strong> — heading ${pin.heading}° · ${pin.photo_key || 'no photo'}</li>`).join('');
+      }
+
+      loadSharedProject();
+    </script>
+  </body>
+</html>

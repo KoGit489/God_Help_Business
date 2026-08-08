@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Project Review</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 2rem; background: #f8fafc; }
+      .card { max-width: 900px; margin: 0 auto; padding: 1.25rem; background: white; border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.06); }
+      .grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+      .panel { border: 1px solid #e2e8f0; border-radius: 10px; padding: 1rem; background: #fcfdff; }
+      button { padding: 0.7rem; border-radius: 6px; border: 1px solid #cbd5e1; background: #2563eb; color: white; cursor: pointer; }
+      code { background: #f1f5f9; padding: 0.2rem 0.4rem; border-radius: 4px; }
+      ul { padding-left: 1.2rem; }
+      .muted { color: #64748b; font-size: 0.95rem; }
+      .share-box { margin-top: 0.75rem; padding: 0.75rem; border-radius: 8px; background: #eff6ff; border: 1px solid #bfdbfe; }
+      .status-pill { display: inline-block; padding: 0.35rem 0.6rem; border-radius: 999px; background: #fef3c7; color: #92400e; font-size: 0.9rem; margin-bottom: 0.5rem; }
+      .project-list { display: grid; gap: 0.6rem; }
+      .project-pill { display: inline-flex; align-items: center; justify-content: space-between; gap: 0.6rem; padding: 0.7rem 0.8rem; border: 1px solid #dbeafe; border-radius: 8px; background: white; cursor: pointer; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1>Project Review</h1>
+      <p>This page gives the project a clearer review view so captured pins can be reviewed, shared, and presented more clearly.</p>
+      <div class="grid">
+        <div class="panel">
+          <h2>Create or open a project</h2>
+          <input id="review-title" placeholder="Project title" />
+          <input id="review-description" placeholder="Description" style="margin-top:0.6rem;" />
+          <button id="create-review-project" style="margin-top:0.8rem;">Create project</button>
+          <button id="create-share-link" style="margin-top:0.8rem; margin-left:0.4rem; background:#0f766e;">Create share link</button>
+          <button id="mark-ready" style="margin-top:0.8rem; margin-left:0.4rem; background:#7c3aed;">Mark ready for review</button>
+          <div class="panel" style="margin-top:1rem; padding: 0.8rem;">
+            <div class="muted">Existing projects</div>
+            <div id="project-list" class="project-list" style="margin-top:0.6rem;"></div>
+          </div>
+        </div>
+        <div class="panel">
+          <h2>Project summary</h2>
+          <div id="review-summary">No project selected.</div>
+          <div id="share-box" class="share-box" style="display:none;">
+            <div class="muted">Share this review</div>
+            <div id="share-link-text" style="word-break: break-all;"></div>
+          </div>
+        </div>
+      </div>
+      <div class="panel" style="margin-top:1rem;">
+        <h2>Captured pins</h2>
+        <ul id="review-pins"></ul>
+      </div>
+    </div>
+    <script src="review.js"></script>
+  </body>
+</html>

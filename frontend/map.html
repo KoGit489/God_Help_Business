@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Field Capture Map</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 2rem; background: #f8fafc; }
+      .card { max-width: 860px; margin: 0 auto; padding: 1.25rem; background: white; border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.06); }
+      .map-surface { border: 1px solid #e2e8f0; border-radius: 10px; min-height: 260px; padding: 1rem; margin-top: 1rem; background: linear-gradient(135deg, #eff6ff, #f8fafc); }
+      .controls { display: grid; gap: 0.7rem; margin-top: 1rem; }
+      input, button, select, textarea { padding: 0.7rem; border-radius: 6px; border: 1px solid #cbd5e1; font-size: 1rem; }
+      button { background: #2563eb; color: white; cursor: pointer; }
+      .summary { margin-top: 1rem; padding: 0.9rem; background: #f8fafc; border-radius: 8px; border: 1px solid #e2e8f0; }
+      code { background: #f1f5f9; padding: 0.2rem 0.4rem; border-radius: 4px; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1>Field Capture Map</h1>
+      <p>This starter map view represents the Phase 2 capture experience for placing pins, setting heading, and uploading photos.</p>
+      <div class="map-surface">
+        <p><strong>Map placeholder</strong></p>
+        <p>Select a project, place a point on the map conceptually, and capture the inspection details.</p>
+        <p>Project: <select id="project-select"></select></p>
+        <p>Latitude: <input id="latitude" value="5.6037" /></p>
+        <p>Longitude: <input id="longitude" value="-0.1870" /></p>
+        <p>Heading: <input id="heading" value="35" /></p>
+        <p>Capture date: <input id="captured_on" value="2026-08-08" /></p>
+        <p>Photo: <input id="photo" type="file" /></p>
+      </div>
+      <div class="controls">
+        <button id="capture-btn">Capture pin</button>
+        <div id="message" class="summary">Ready to capture.</div>
+        <div id="recent-pins" class="summary"></div>
+      </div>
+    </div>
+    <script src="map.js"></script>
+  </body>
+</html>

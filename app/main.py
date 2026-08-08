@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 
 load_dotenv()
@@ -31,6 +32,11 @@ class ProjectResponse(BaseModel):
     title: str
     description: str | None = None
     pin_count: int
+    status: str = "draft"
+
+
+class ProjectStatusUpdateRequest(BaseModel):
+    status: str = Field(min_length=1)
 
 
 class PinCreateRequest(BaseModel):
@@ -56,7 +62,19 @@ class ProjectDetailResponse(BaseModel):
     title: str
     description: str | None = None
     pin_count: int
+    status: str = "draft"
     pins: list[PinResponse]
+
+
+class UploadResponse(BaseModel):
+    id: str
+    photo_key: str
+
+
+class ShareLinkResponse(BaseModel):
+    project_id: str
+    share_token: str
+    share_link: str
 
 
 class AuthUserResponse(BaseModel):
@@ -68,12 +86,82 @@ class AuthUserResponse(BaseModel):
 projects: dict[str, dict[str, Any]] = {}
 pins_by_project: dict[str, list[dict[str, Any]]] = {}
 pins_by_id: dict[str, dict[str, Any]] = {}
+project_share_tokens: dict[str, str] = {}
+share_token_to_project: dict[str, str] = {}
 
 
 def reset_demo_store() -> None:
     projects.clear()
     pins_by_project.clear()
     pins_by_id.clear()
+    project_share_tokens.clear()
+    share_token_to_project.clear()
+
+
+def seed_demo_data() -> None:
+    if projects:
+        return
+
+    demo_project_id = str(uuid4())
+    demo_project = {
+        "id": demo_project_id,
+        "title": "North Ridge Inspection",
+        "description": "Demo project with evidence captured for a review-ready walkthrough.",
+    }
+    projects[demo_project_id] = demo_project
+    pins_by_project[demo_project_id] = [
+        {
+            "id": str(uuid4()),
+            "project_id": demo_project_id,
+            "latitude": 5.6037,
+            "longitude": -0.1870,
+            "heading": 34.0,
+            "captured_on": "2026-08-08",
+            "photo_key": "uploads/demo/roof.jpg",
+        },
+        {
+            "id": str(uuid4()),
+            "project_id": demo_project_id,
+            "latitude": 5.6041,
+            "longitude": -0.1880,
+            "heading": 118.0,
+            "captured_on": "2026-08-08",
+            "photo_key": "uploads/demo/beam.jpg",
+        },
+    ]
+    pins_by_id.update({pin["id"]: pin for pin in pins_by_project[demo_project_id]})
+
+
+seed_demo_data()
+
+
+def build_project_detail(project_id: str) -> ProjectDetailResponse:
+    project = projects.get(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    pin_items = [PinResponse(**pin) for pin in pins_by_project.get(project_id, [])]
+    return ProjectDetailResponse(
+        id=project["id"],
+        title=project["title"],
+        description=project.get("description"),
+        pin_count=len(pin_items),
+        status=project.get("status", "draft"),
+        pins=pin_items,
+    )
+
+
+def ensure_project_access(project_id: str, share_token: str | None = None) -> ProjectDetailResponse:
+    project = projects.get(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    if share_token is not None:
+        expected_token = project_share_tokens.get(project_id)
+        if not expected_token or expected_token != share_token:
+            raise HTTPException(status_code=403, detail="Invalid share token for this project")
+
+    return build_project_detail(project_id)
 
 
 @app.get("/", tags=["core"])
@@ -102,6 +190,7 @@ def create_project(payload: ProjectCreateRequest) -> ProjectResponse:
         "id": project_id,
         "title": payload.title,
         "description": payload.description,
+        "status": "draft",
     }
     projects[project_id] = project
     pins_by_project[project_id] = []
@@ -116,6 +205,7 @@ def list_projects() -> list[ProjectResponse]:
             title=project["title"],
             description=project.get("description"),
             pin_count=len(pins_by_project.get(project["id"], [])),
+            status=project.get("status", "draft"),
         )
         for project in projects.values()
     ]
@@ -123,16 +213,53 @@ def list_projects() -> list[ProjectResponse]:
 
 @app.get("/projects/{project_id}", response_model=ProjectDetailResponse, tags=["projects"])
 def get_project(project_id: str) -> ProjectDetailResponse:
-    project = projects.get(project_id)
-    if not project:
+    return build_project_detail(project_id)
+
+
+@app.get("/projects/{project_id}/review", response_model=ProjectDetailResponse, tags=["projects"])
+def get_project_review(project_id: str, share_token: str | None = Query(default=None)) -> ProjectDetailResponse:
+    return ensure_project_access(project_id, share_token)
+
+
+@app.post("/projects/{project_id}/share-link", response_model=ShareLinkResponse, tags=["projects"])
+def create_share_link(project_id: str) -> ShareLinkResponse:
+    if project_id not in projects:
         raise HTTPException(status_code=404, detail="Project not found")
-    pin_items = [PinResponse(**pin) for pin in pins_by_project.get(project_id, [])]
-    return ProjectDetailResponse(
-        id=project["id"],
-        title=project["title"],
-        description=project.get("description"),
-        pin_count=len(pin_items),
-        pins=pin_items,
+
+    share_token = project_share_tokens.get(project_id)
+    if not share_token:
+        share_token = str(uuid4())
+        project_share_tokens[project_id] = share_token
+        share_token_to_project[share_token] = project_id
+
+    return ShareLinkResponse(
+        project_id=project_id,
+        share_token=share_token,
+        share_link=f"http://127.0.0.1:8000/share/{share_token}",
+    )
+
+
+@app.get("/share/{share_token}", response_model=ProjectDetailResponse, tags=["projects"])
+def open_shared_project(share_token: str) -> ProjectDetailResponse:
+    project_id = share_token_to_project.get(share_token)
+    if not project_id:
+        raise HTTPException(status_code=404, detail="Share link not found")
+
+    return build_project_detail(project_id)
+
+
+@app.post("/projects/{project_id}/status", response_model=ProjectResponse, tags=["projects"])
+def update_project_status(project_id: str, payload: ProjectStatusUpdateRequest) -> ProjectResponse:
+    if project_id not in projects:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    projects[project_id]["status"] = payload.status
+    return ProjectResponse(
+        id=projects[project_id]["id"],
+        title=projects[project_id]["title"],
+        description=projects[project_id].get("description"),
+        pin_count=len(pins_by_project.get(project_id, [])),
+        status=projects[project_id]["status"],
     )
 
 
@@ -173,3 +300,20 @@ def get_pin(project_id: str, pin_id: str) -> PinResponse:
         raise HTTPException(status_code=404, detail="Pin not found")
 
     return PinResponse(**pin)
+
+
+@app.post("/projects/{project_id}/pins/{pin_id}/upload", response_model=UploadResponse, tags=["pins"])
+def upload_pin_photo(project_id: str, pin_id: str, file: UploadFile = File(...)) -> UploadResponse:
+    if project_id not in projects:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    pin = pins_by_id.get(pin_id)
+    if not pin or pin["project_id"] != project_id:
+        raise HTTPException(status_code=404, detail="Pin not found")
+
+    if file.filename is None:
+        raise HTTPException(status_code=400, detail="A filename is required")
+
+    photo_key = f"uploads/{project_id}/{pin_id}/{Path(file.filename).name}"
+    pin["photo_key"] = photo_key
+    return UploadResponse(id=pin_id, photo_key=photo_key)
