@@ -10,6 +10,8 @@ obj/
 .venv/
 __pycache__/
 *.py[cod]
+uploaded_files/
+*.db
 
 # Node / Next.js
 node_modules/

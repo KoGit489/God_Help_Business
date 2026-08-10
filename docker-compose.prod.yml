@@ -1,0 +1,41 @@
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: appuser
+      POSTGRES_PASSWORD: apppass
+      POSTGRES_DB: god_help_business
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - db
+    environment:
+      APP_PERSISTENCE: database
+      DATABASE_URL: postgresql+psycopg://appuser:apppass@db:5432/god_help_business
+      STORAGE_BACKEND: local
+      UPLOAD_DIR: /var/app/uploads
+      PUBLIC_SHARE_BASE_URL: http://localhost/share.html
+      SEED_DEMO_DATA: "false"
+    volumes:
+      - uploads:/var/app/uploads
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "80:80"
+
+volumes:
+  pgdata:
+  uploads:

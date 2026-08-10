@@ -1,84 +1,137 @@
-const apiBase = 'http://127.0.0.1:8000';
+const apiBase = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+  ? 'http://127.0.0.1:8000'
+  : '/api';
 let activeProjectId = null;
 let activeShareToken = null;
 
-async function loadProjectList() {
-  const response = await fetch(`${apiBase}/projects`);
-  const projects = await response.json();
-  const list = document.getElementById('project-list');
-  list.innerHTML = '';
-
-  if (!projects.length) {
-    list.innerHTML = '<div class="muted">No projects yet — create one to start the review flow.</div>';
-    return;
+function setReviewStatus(message) {
+  const summary = document.getElementById('review-summary');
+  if (!activeProjectId) {
+    summary.innerHTML = message;
   }
+}
 
-  projects.forEach((project) => {
-    const item = document.createElement('div');
-    item.className = 'project-pill';
-    item.innerHTML = `<span><strong>${project.title}</strong><br /><span class="muted">${project.pin_count} pins captured</span></span><button type="button" style="padding: 0.45rem 0.7rem;">Open</button>`;
-    item.querySelector('button').addEventListener('click', () => {
-      activeProjectId = project.id;
-      activeShareToken = null;
-      renderProject(project.id);
+async function apiRequest(path, options) {
+  const response = await fetch(`${apiBase}${path}`, options);
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    const apiMessage = payload?.error?.message || `Request failed with status ${response.status}`;
+    throw new Error(apiMessage);
+  }
+  return payload;
+}
+
+async function loadProjectList() {
+  const list = document.getElementById('project-list');
+  list.innerHTML = '<div class="muted">Loading projects...</div>';
+
+  try {
+    const projects = await apiRequest('/projects');
+    list.innerHTML = '';
+
+    if (!projects.length) {
+      list.innerHTML = '<div class="muted">No projects yet — create one to start the review flow.</div>';
+      setReviewStatus('No project selected.');
+      return;
+    }
+
+    projects.forEach((project) => {
+      const item = document.createElement('div');
+      item.className = 'project-pill';
+      item.innerHTML = `<span><strong>${project.title}</strong><br /><span class="muted">${project.pin_count} pins captured · ${project.status}</span></span><button type="button" style="padding: 0.45rem 0.7rem;">Open</button>`;
+      item.querySelector('button').addEventListener('click', () => {
+        activeProjectId = project.id;
+        activeShareToken = null;
+        renderProject(project.id);
+      });
+      list.appendChild(item);
     });
-    list.appendChild(item);
-  });
+  } catch (error) {
+    list.innerHTML = `<div class="muted">Unable to load projects: ${error.message}</div>`;
+  }
 }
 
 async function createReviewProject() {
   const title = document.getElementById('review-title').value.trim();
   const description = document.getElementById('review-description').value.trim();
-  if (!title) return;
+  if (!title) {
+    setReviewStatus('Project title is required.');
+    return;
+  }
 
-  const response = await fetch(`${apiBase}/projects`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ title, description }),
-  });
-  const project = await response.json();
-  activeProjectId = project.id;
-  activeShareToken = null;
-  await loadProjectList();
-  await renderProject(project.id);
+  setReviewStatus('Creating project...');
+  try {
+    const project = await apiRequest('/projects', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, description }),
+    });
+    activeProjectId = project.id;
+    activeShareToken = null;
+    await loadProjectList();
+    await renderProject(project.id);
+  } catch (error) {
+    setReviewStatus(`Unable to create project: ${error.message}`);
+  }
 }
 
 async function createShareLink() {
-  if (!activeProjectId) return;
-  const response = await fetch(`${apiBase}/projects/${activeProjectId}/share-link`, { method: 'POST' });
-  const payload = await response.json();
-  activeShareToken = payload.share_token;
-  document.getElementById('share-box').style.display = 'block';
-  document.getElementById('share-link-text').innerHTML = `<a href="${payload.share_link}" target="_blank">${payload.share_link}</a>`;
+  if (!activeProjectId) {
+    setReviewStatus('Open a project before creating a share link.');
+    return;
+  }
+
+  try {
+    const payload = await apiRequest(`/projects/${activeProjectId}/share-link`, { method: 'POST' });
+    activeShareToken = payload.share_token;
+    document.getElementById('share-box').style.display = 'block';
+    document.getElementById('share-link-text').innerHTML = `<a href="${payload.share_link}" target="_blank">${payload.share_link}</a>`;
+  } catch (error) {
+    setReviewStatus(`Unable to create share link: ${error.message}`);
+  }
 }
 
 async function markReadyForReview() {
-  if (!activeProjectId) return;
-  const response = await fetch(`${apiBase}/projects/${activeProjectId}/status`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ status: 'ready_for_review' }),
-  });
-  const payload = await response.json();
-  if (payload.status) {
+  if (!activeProjectId) {
+    setReviewStatus('Open a project before updating status.');
+    return;
+  }
+
+  try {
+    await apiRequest(`/projects/${activeProjectId}/status`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'ready_for_review' }),
+    });
+    await loadProjectList();
     await renderProject(activeProjectId);
+  } catch (error) {
+    setReviewStatus(`Unable to update project status: ${error.message}`);
   }
 }
 
 async function renderProject(projectId) {
-  const response = await fetch(`${apiBase}/projects/${projectId}/review${activeShareToken ? `?share_token=${activeShareToken}` : ''}`);
-  const project = await response.json();
-  document.getElementById('review-summary').innerHTML = `<div class="status-pill">${project.status}</div><strong>${project.title}</strong><br />${project.description || 'No description'}<br /><span>${project.pin_count} pins captured</span>`;
-
+  document.getElementById('review-summary').innerHTML = 'Loading project review...';
   const pinList = document.getElementById('review-pins');
-  if (!project.pins.length) {
-    pinList.innerHTML = '<li>No pins yet for this project.</li>';
-    return;
-  }
+  pinList.innerHTML = '<li>Loading pins...</li>';
 
-  pinList.innerHTML = project.pins
-    .map((pin) => `<li><strong>${pin.captured_on}</strong> — heading ${pin.heading}° · ${pin.photo_key || 'no photo'}</li>`)
-    .join('');
+  try {
+    const query = activeShareToken ? `?share_token=${encodeURIComponent(activeShareToken)}` : '';
+    const project = await apiRequest(`/projects/${projectId}/review${query}`);
+    document.getElementById('review-summary').innerHTML = `<div class="status-pill">${project.status}</div><strong>${project.title}</strong><br />${project.description || 'No description'}<br /><span>${project.pin_count} pins captured</span>`;
+
+    if (!project.pins.length) {
+      pinList.innerHTML = '<li>No pins yet for this project.</li>';
+      return;
+    }
+
+    pinList.innerHTML = project.pins
+      .map((pin) => `<li><strong>${pin.captured_on}</strong> — heading ${pin.heading}° · ${pin.photo_key || 'no photo'}</li>`)
+      .join('');
+  } catch (error) {
+    document.getElementById('review-summary').innerHTML = `Unable to load review: ${error.message}`;
+    pinList.innerHTML = '<li>Unable to load pins.</li>';
+  }
 }
 
 document.getElementById('create-review-project').addEventListener('click', createReviewProject);

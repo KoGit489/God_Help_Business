@@ -1,68 +1,134 @@
-const apiBase = 'http://127.0.0.1:8000';
+const apiBase = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+  ? 'http://127.0.0.1:8000'
+  : '/api';
 
-async function loadUser() {
-  const response = await fetch(`${apiBase}/auth/me`);
-  const user = await response.json();
-  document.getElementById('user-name').textContent = user.name;
-  document.getElementById('user-email').textContent = user.email;
-}
+const list = document.getElementById('project-list');
+const projectCount = document.getElementById('project-count');
+const pinCount = document.getElementById('pin-count');
+const reviewReady = document.getElementById('review-ready');
 
-async function loadProjects() {
-  const response = await fetch(`${apiBase}/projects`);
-  const projects = await response.json();
-  const list = document.getElementById('project-list');
-  const projectCount = document.getElementById('project-count');
-  const pinCount = document.getElementById('pin-count');
-  const reviewReady = document.getElementById('review-ready');
-
-  list.innerHTML = '';
-
-  if (!projects.length) {
-    list.innerHTML = '<li>No projects yet.</li>';
-    projectCount.textContent = '0';
-    pinCount.textContent = '0';
-    reviewReady.textContent = '0';
+function setDashboardMessage(message) {
+  const existing = document.getElementById('dashboard-message');
+  if (existing) {
+    existing.textContent = message;
     return;
   }
 
-  const totalPins = projects.reduce((sum, project) => sum + project.pin_count, 0);
-  projectCount.textContent = projects.length;
-  pinCount.textContent = totalPins;
-  reviewReady.textContent = projects.filter((project) => project.pin_count > 0).length;
+  const messageBox = document.createElement('p');
+  messageBox.id = 'dashboard-message';
+  messageBox.style.marginTop = '0.75rem';
+  messageBox.style.color = '#475569';
+  messageBox.textContent = message;
+  document.querySelector('.card').appendChild(messageBox);
+}
 
-  projects.forEach((project) => {
-    const item = document.createElement('li');
-    item.innerHTML = `<strong>${project.title}</strong> — ${project.description || 'No description'} <span>(${project.pin_count} pins)</span> · <a href="review.html">Review</a>`;
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ title, description }),
-  });
+async function apiRequest(path, options) {
+  const response = await fetch(`${apiBase}${path}`, options);
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    const message = payload?.error?.message || `Request failed with status ${response.status}`;
+    throw new Error(message);
+  }
+  return payload;
+}
 
-  if (response.ok) {
+async function loadUser() {
+  setDashboardMessage('Loading user...');
+  try {
+    const user = await apiRequest('/auth/me');
+    document.getElementById('user-name').textContent = user.name;
+    document.getElementById('user-email').textContent = user.email;
+    setDashboardMessage('User loaded.');
+  } catch (error) {
+    document.getElementById('user-name').textContent = 'Unavailable';
+    document.getElementById('user-email').textContent = '';
+    setDashboardMessage(`Unable to load user: ${error.message}`);
+  }
+}
+
+async function loadProjects() {
+  list.innerHTML = '<li>Loading projects...</li>';
+  try {
+    const projects = await apiRequest('/projects');
+
+    if (!projects.length) {
+      list.innerHTML = '<li>No projects yet.</li>';
+      projectCount.textContent = '0';
+      pinCount.textContent = '0';
+      reviewReady.textContent = '0';
+      setDashboardMessage('Create your first project to get started.');
+      return;
+    }
+
+    const totalPins = projects.reduce((sum, project) => sum + project.pin_count, 0);
+    projectCount.textContent = String(projects.length);
+    pinCount.textContent = String(totalPins);
+    reviewReady.textContent = String(projects.filter((project) => project.status === 'ready_for_review').length);
+
+    list.innerHTML = '';
+    projects.forEach((project) => {
+      const item = document.createElement('li');
+      item.innerHTML = `<strong>${project.title}</strong> — ${project.description || 'No description'} <span>(${project.pin_count} pins)</span> · <span>Status: ${project.status}</span> · <a href="review.html">Review</a>`;
+      list.appendChild(item);
+    });
+    setDashboardMessage('Projects loaded.');
+  } catch (error) {
+    list.innerHTML = '<li>Unable to load projects.</li>';
+    setDashboardMessage(`Error loading projects: ${error.message}`);
+  }
+}
+
+async function createProject(event) {
+  event.preventDefault();
+  const title = document.getElementById('title').value.trim();
+  const description = document.getElementById('description').value.trim();
+  if (!title) {
+    setDashboardMessage('Project title is required.');
+    return;
+  }
+
+  setDashboardMessage('Creating project...');
+  try {
+    await apiRequest('/projects', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, description }),
+    });
     document.getElementById('project-form').reset();
-    loadProjects();
+    setDashboardMessage('Project created.');
+    await loadProjects();
+  } catch (error) {
+    setDashboardMessage(`Unable to create project: ${error.message}`);
   }
 }
 
 async function addSamplePin() {
-  const projects = await (await fetch(`${apiBase}/projects`)).json();
-  if (!projects.length) {
-    return;
+  setDashboardMessage('Adding demo pin...');
+  try {
+    const projects = await apiRequest('/projects');
+    if (!projects.length) {
+      setDashboardMessage('Create a project before adding a demo pin.');
+      return;
+    }
+
+    const project = projects[0];
+    await apiRequest(`/projects/${project.id}/pins`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        latitude: 5.6037,
+        longitude: -0.187,
+        heading: 35,
+        captured_on: '2026-08-07',
+        photo_key: 'photos/demo.jpg',
+      }),
+    });
+
+    setDashboardMessage('Demo pin added.');
+    await loadProjects();
+  } catch (error) {
+    setDashboardMessage(`Unable to add demo pin: ${error.message}`);
   }
-
-  const project = projects[0];
-  await fetch(`${apiBase}/projects/${project.id}/pins`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      latitude: 5.6037,
-      longitude: -0.187,
-      heading: 35,
-      captured_on: '2026-08-07',
-      photo_key: 'photos/demo.jpg',
-    }),
-  });
-
-  loadProjects();
 }
 
 document.getElementById('project-form').addEventListener('submit', createProject);

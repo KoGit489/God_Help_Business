@@ -227,6 +227,14 @@ The current Python starter in [app/main.py](app/main.py) should become the backe
 - Deploy frontend and backend
 - Connect storage and database in production
 
+### Phase 4 implementation notes
+
+- Backend now returns consistent error envelopes with request IDs for traceability.
+- Frontend pages now include explicit loading, empty, and error states.
+- Production deployment files are provided for backend, frontend, and database containers.
+- Backend supports `APP_PERSISTENCE=database` with SQLAlchemy models and PostgreSQL.
+- Upload storage supports `STORAGE_BACKEND=local` (volume) and `STORAGE_BACKEND=s3`.
+
 ## 9. Implementation order
 
 1. Set up the repo and environments

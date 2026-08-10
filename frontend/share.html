@@ -23,24 +23,52 @@
       </div>
     </div>
     <script>
-      const apiBase = 'http://127.0.0.1:8000';
-      const token = window.location.pathname.split('/').pop();
+      const apiBase = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+        ? 'http://127.0.0.1:8000'
+        : '/api';
+
+      const params = new URLSearchParams(window.location.search);
+      const token = params.get('token') || window.location.pathname.split('/').pop();
 
       async function loadSharedProject() {
-        const response = await fetch(`${apiBase}/share/${token}`);
-        if (!response.ok) {
-          document.getElementById('title').textContent = 'This review link is not available.';
-          return;
-        }
-        const project = await response.json();
-        document.getElementById('title').textContent = project.title;
-        document.getElementById('description').textContent = project.description || 'No description provided.';
+        const title = document.getElementById('title');
+        const description = document.getElementById('description');
         const pins = document.getElementById('pins');
-        if (!project.pins.length) {
-          pins.innerHTML = '<li>No evidence has been captured for this project yet.</li>';
+
+        if (!token) {
+          title.textContent = 'This review link is missing a token.';
+          description.textContent = 'Please check the shared URL.';
           return;
         }
-        pins.innerHTML = project.pins.map((pin) => `<li><strong>${pin.captured_on}</strong> — heading ${pin.heading}° · ${pin.photo_key || 'no photo'}</li>`).join('');
+
+        title.textContent = 'Loading shared project...';
+        description.textContent = '';
+        pins.innerHTML = '<li>Loading captured evidence...</li>';
+
+        try {
+          const response = await fetch(`${apiBase}/share/${token}`);
+          const payload = await response.json().catch(() => null);
+          if (!response.ok) {
+            title.textContent = 'This review link is not available.';
+            description.textContent = payload?.error?.message || 'The shared link is invalid or expired.';
+            pins.innerHTML = '<li>No evidence available.</li>';
+            return;
+          }
+
+          title.textContent = payload.title;
+          description.textContent = payload.description || 'No description provided.';
+          if (!payload.pins.length) {
+            pins.innerHTML = '<li>No evidence has been captured for this project yet.</li>';
+            return;
+          }
+          pins.innerHTML = payload.pins
+            .map((pin) => `<li><strong>${pin.captured_on}</strong> — heading ${pin.heading}° · ${pin.photo_key || 'no photo'}</li>`)
+            .join('');
+        } catch (error) {
+          title.textContent = 'Unable to load shared project.';
+          description.textContent = error.message;
+          pins.innerHTML = '<li>Could not load evidence.</li>';
+        }
       }
 
       loadSharedProject();
