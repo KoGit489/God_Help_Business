@@ -77,3 +77,58 @@ def test_auth_me_returns_demo_user() -> None:
     response = client.get("/auth/me")
     assert response.status_code == 200
     assert response.json()["email"] == "demo@God_Help_Business.local"
+
+
+def test_project_ownership_is_enforced_by_user_id() -> None:
+    reset_demo_store()
+
+    created = client.post(
+        "/projects",
+        json={"title": "Owned Site", "description": "Private field record"},
+        headers={"X-User-Id": "user-alpha"},
+    )
+    assert created.status_code == 201
+    project_id = created.json()["id"]
+
+    forbidden = client.get(
+        f"/projects/{project_id}",
+        headers={"X-User-Id": "user-beta"},
+    )
+    assert forbidden.status_code == 403
+
+    allowed = client.get(
+        f"/projects/{project_id}",
+        headers={"X-User-Id": "user-alpha"},
+    )
+    assert allowed.status_code == 200
+    assert allowed.json()["title"] == "Owned Site"
+
+
+def test_pin_accepts_360_native_media_metadata() -> None:
+    reset_demo_store()
+
+    project = client.post(
+        "/projects",
+        json={"title": "360 Site", "description": "Native camera capture"},
+        headers={"X-User-Id": "user-alpha"},
+    ).json()
+
+    pin = client.post(
+        f"/projects/{project['id']}/pins",
+        json={
+            "latitude": 5.6037,
+            "longitude": -0.1870,
+            "heading": 180.0,
+            "captured_on": "2026-08-11",
+            "photo_key": "photos/360.jpg",
+            "media_type": "insta360",
+            "native_file_key": "raw/360/clip.insp",
+            "thumbnail_key": "thumbs/360/clip.jpg",
+        },
+        headers={"X-User-Id": "user-alpha"},
+    )
+    assert pin.status_code == 201
+    payload = pin.json()
+    assert payload["media_type"] == "insta360"
+    assert payload["native_file_key"] == "raw/360/clip.insp"
+    assert payload["thumbnail_key"] == "thumbs/360/clip.jpg"

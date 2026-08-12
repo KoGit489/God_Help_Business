@@ -90,6 +90,9 @@ class PinCreateRequest(BaseModel):
     heading: float
     captured_on: str
     photo_key: str | None = None
+    media_type: str | None = None
+    native_file_key: str | None = None
+    thumbnail_key: str | None = None
 
 
 class PinResponse(BaseModel):
@@ -100,6 +103,9 @@ class PinResponse(BaseModel):
     heading: float
     captured_on: str
     photo_key: str | None = None
+    media_type: str | None = None
+    native_file_key: str | None = None
+    thumbnail_key: str | None = None
 
 
 class ProjectDetailResponse(BaseModel):
@@ -253,6 +259,9 @@ def _pin_response_from_record(record: PinRecord) -> PinResponse:
         heading=record.heading,
         captured_on=record.captured_on,
         photo_key=record.photo_key,
+        media_type=record.media_type,
+        native_file_key=record.native_file_key,
+        thumbnail_key=record.thumbnail_key,
     )
 
 
@@ -307,11 +316,39 @@ def _build_project_detail(project_id: str) -> ProjectDetailResponse:
         return _project_detail_from_record(db, project)
 
 
-def _ensure_project_access(project_id: str, share_token: str | None = None) -> ProjectDetailResponse:
+def _get_user_id(request: Request) -> str:
+    user_id = request.headers.get("x-user-id")
+    return user_id or "demo"
+
+
+def _ensure_project_ownership(project_id: str, user_id: str) -> None:
+    if user_id in {"demo", "demo-user"}:
+        return
+
+    if PERSISTENCE_MODE == "database":
+        with SessionLocal() as db:
+            project = db.get(ProjectRecord, project_id)
+            if not project:
+                raise HTTPException(status_code=404, detail="Project not found")
+            if project.owner_id != user_id:
+                raise HTTPException(status_code=403, detail="Project does not belong to this user")
+        return
+
+    project = projects.get(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if project.get("owner_id") != user_id:
+        raise HTTPException(status_code=403, detail="Project does not belong to this user")
+
+
+def _ensure_project_access(project_id: str, share_token: str | None = None, user_id: str | None = None) -> ProjectDetailResponse:
     if PERSISTENCE_MODE != "database":
         project = projects.get(project_id)
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
+
+        if user_id and project.get("owner_id") and project.get("owner_id") != user_id and user_id not in {"demo", "demo-user"}:
+            raise HTTPException(status_code=403, detail="Project does not belong to this user")
 
         if share_token is not None:
             expected_token = project_share_tokens.get(project_id)
@@ -323,6 +360,9 @@ def _ensure_project_access(project_id: str, share_token: str | None = None) -> P
         project = db.get(ProjectRecord, project_id)
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
+
+        if user_id and user_id not in {"demo", "demo-user"} and project.owner_id != user_id:
+            raise HTTPException(status_code=403, detail="Project does not belong to this user")
 
         if share_token is not None:
             link = db.scalar(select(ShareLinkRecord).where(ShareLinkRecord.project_id == project_id))
@@ -345,6 +385,7 @@ def _seed_demo_data() -> None:
             project_id = str(uuid4())
             project = ProjectRecord(
                 id=project_id,
+                owner_id="demo-user",
                 title="North Ridge Inspection",
                 description="Demo project with evidence captured for a review-ready walkthrough.",
                 status="ready_for_review",
@@ -357,6 +398,9 @@ def _seed_demo_data() -> None:
                 heading=34.0,
                 captured_on="2026-08-08",
                 photo_key="uploads/demo/roof.jpg",
+                media_type="photo",
+                native_file_key=None,
+                thumbnail_key=None,
             )
             pin_b = PinRecord(
                 id=str(uuid4()),
@@ -366,6 +410,9 @@ def _seed_demo_data() -> None:
                 heading=118.0,
                 captured_on="2026-08-08",
                 photo_key="uploads/demo/beam.jpg",
+                media_type="photo",
+                native_file_key=None,
+                thumbnail_key=None,
             )
             db.add_all([project, pin_a, pin_b])
             db.commit()
@@ -377,6 +424,7 @@ def _seed_demo_data() -> None:
     demo_project_id = str(uuid4())
     demo_project = {
         "id": demo_project_id,
+        "owner_id": "demo-user",
         "title": "North Ridge Inspection",
         "description": "Demo project with evidence captured for a review-ready walkthrough.",
         "status": "ready_for_review",
@@ -391,6 +439,9 @@ def _seed_demo_data() -> None:
             "heading": 34.0,
             "captured_on": "2026-08-08",
             "photo_key": "uploads/demo/roof.jpg",
+            "media_type": "photo",
+            "native_file_key": None,
+            "thumbnail_key": None,
         },
         {
             "id": str(uuid4()),
@@ -400,6 +451,9 @@ def _seed_demo_data() -> None:
             "heading": 118.0,
             "captured_on": "2026-08-08",
             "photo_key": "uploads/demo/beam.jpg",
+            "media_type": "photo",
+            "native_file_key": None,
+            "thumbnail_key": None,
         },
     ]
     pins_by_id.update({pin["id"]: pin for pin in pins_by_project[demo_project_id]})
@@ -434,7 +488,8 @@ def readiness_check() -> ReadinessResponse:
 
 
 @app.get("/auth/me", response_model=AuthUserResponse, tags=["auth"])
-def get_current_user() -> AuthUserResponse:
+def get_current_user(request: Request) -> AuthUserResponse:
+    user_id = _get_user_id(request)
     return AuthUserResponse(
         id="demo-user",
         email="demo@God_Help_Business.local",
@@ -443,11 +498,13 @@ def get_current_user() -> AuthUserResponse:
 
 
 @app.post("/projects", response_model=ProjectResponse, status_code=201, tags=["projects"])
-def create_project(payload: ProjectCreateRequest) -> ProjectResponse:
+def create_project(payload: ProjectCreateRequest, request: Request) -> ProjectResponse:
+    user_id = _get_user_id(request)
     if PERSISTENCE_MODE == "database":
         with SessionLocal() as db:
             project = ProjectRecord(
                 id=str(uuid4()),
+                owner_id=user_id,
                 title=payload.title,
                 description=payload.description,
                 status="draft",
@@ -465,6 +522,7 @@ def create_project(payload: ProjectCreateRequest) -> ProjectResponse:
     project_id = str(uuid4())
     project = {
         "id": project_id,
+        "owner_id": user_id,
         "title": payload.title,
         "description": payload.description,
         "status": "draft",
@@ -475,10 +533,11 @@ def create_project(payload: ProjectCreateRequest) -> ProjectResponse:
 
 
 @app.get("/projects", response_model=list[ProjectResponse], tags=["projects"])
-def list_projects() -> list[ProjectResponse]:
+def list_projects(request: Request) -> list[ProjectResponse]:
+    user_id = _get_user_id(request)
     if PERSISTENCE_MODE == "database":
         with SessionLocal() as db:
-            items = db.query(ProjectRecord).all()
+            items = db.query(ProjectRecord).filter(ProjectRecord.owner_id == user_id).all()
             return [_project_response_from_record(db, project) for project in items]
 
     return [
@@ -490,21 +549,25 @@ def list_projects() -> list[ProjectResponse]:
             status=project.get("status", "draft"),
         )
         for project in projects.values()
+        if project.get("owner_id") == user_id or user_id == "demo-user"
     ]
 
 
 @app.get("/projects/{project_id}", response_model=ProjectDetailResponse, tags=["projects"])
-def get_project(project_id: str) -> ProjectDetailResponse:
+def get_project(project_id: str, request: Request) -> ProjectDetailResponse:
+    _ensure_project_ownership(project_id, _get_user_id(request))
     return _build_project_detail(project_id)
 
 
 @app.get("/projects/{project_id}/review", response_model=ProjectDetailResponse, tags=["projects"])
-def get_project_review(project_id: str, share_token: str | None = Query(default=None)) -> ProjectDetailResponse:
-    return _ensure_project_access(project_id, share_token)
+def get_project_review(project_id: str, request: Request, share_token: str | None = Query(default=None)) -> ProjectDetailResponse:
+    return _ensure_project_access(project_id, share_token, _get_user_id(request))
 
 
 @app.post("/projects/{project_id}/status", response_model=ProjectResponse, tags=["projects"])
-def update_project_status(project_id: str, payload: ProjectStatusUpdateRequest) -> ProjectResponse:
+def update_project_status(project_id: str, payload: ProjectStatusUpdateRequest, request: Request) -> ProjectResponse:
+    user_id = _get_user_id(request)
+    _ensure_project_ownership(project_id, user_id)
     if PERSISTENCE_MODE == "database":
         with SessionLocal() as db:
             project = db.get(ProjectRecord, project_id)
@@ -528,7 +591,9 @@ def update_project_status(project_id: str, payload: ProjectStatusUpdateRequest) 
 
 
 @app.post("/projects/{project_id}/share-link", response_model=ShareLinkResponse, tags=["projects"])
-def create_share_link(project_id: str) -> ShareLinkResponse:
+def create_share_link(project_id: str, request: Request) -> ShareLinkResponse:
+    user_id = _get_user_id(request)
+    _ensure_project_ownership(project_id, user_id)
     if PERSISTENCE_MODE == "database":
         with SessionLocal() as db:
             project = db.get(ProjectRecord, project_id)
@@ -584,7 +649,9 @@ def open_shared_project(share_token: str) -> ProjectDetailResponse:
 
 
 @app.post("/projects/{project_id}/pins", response_model=PinResponse, status_code=201, tags=["pins"])
-def create_pin(project_id: str, payload: PinCreateRequest) -> PinResponse:
+def create_pin(project_id: str, payload: PinCreateRequest, request: Request) -> PinResponse:
+    user_id = _get_user_id(request)
+    _ensure_project_ownership(project_id, user_id)
     if PERSISTENCE_MODE == "database":
         with SessionLocal() as db:
             project = db.get(ProjectRecord, project_id)
@@ -599,6 +666,9 @@ def create_pin(project_id: str, payload: PinCreateRequest) -> PinResponse:
                 heading=payload.heading,
                 captured_on=payload.captured_on,
                 photo_key=payload.photo_key,
+                media_type=payload.media_type or "photo",
+                native_file_key=payload.native_file_key,
+                thumbnail_key=payload.thumbnail_key,
             )
             db.add(pin)
             db.commit()
@@ -616,6 +686,9 @@ def create_pin(project_id: str, payload: PinCreateRequest) -> PinResponse:
         "heading": payload.heading,
         "captured_on": payload.captured_on,
         "photo_key": payload.photo_key,
+        "media_type": payload.media_type or "photo",
+        "native_file_key": payload.native_file_key,
+        "thumbnail_key": payload.thumbnail_key,
     }
     pins_by_project[project_id].append(pin)
     pins_by_id[pin_id] = pin
@@ -623,7 +696,9 @@ def create_pin(project_id: str, payload: PinCreateRequest) -> PinResponse:
 
 
 @app.get("/projects/{project_id}/pins", response_model=list[PinResponse], tags=["pins"])
-def list_pins(project_id: str) -> list[PinResponse]:
+def list_pins(project_id: str, request: Request) -> list[PinResponse]:
+    user_id = _get_user_id(request)
+    _ensure_project_ownership(project_id, user_id)
     if PERSISTENCE_MODE == "database":
         with SessionLocal() as db:
             project = db.get(ProjectRecord, project_id)
@@ -638,7 +713,9 @@ def list_pins(project_id: str) -> list[PinResponse]:
 
 
 @app.get("/projects/{project_id}/pins/{pin_id}", response_model=PinResponse, tags=["pins"])
-def get_pin(project_id: str, pin_id: str) -> PinResponse:
+def get_pin(project_id: str, pin_id: str, request: Request) -> PinResponse:
+    user_id = _get_user_id(request)
+    _ensure_project_ownership(project_id, user_id)
     if PERSISTENCE_MODE == "database":
         with SessionLocal() as db:
             project = db.get(ProjectRecord, project_id)
@@ -662,9 +739,12 @@ def get_pin(project_id: str, pin_id: str) -> PinResponse:
 
 
 @app.post("/projects/{project_id}/pins/{pin_id}/upload", response_model=UploadResponse, tags=["pins"])
-def upload_pin_photo(project_id: str, pin_id: str, file: UploadFile = File(...)) -> UploadResponse:
+def upload_pin_photo(project_id: str, pin_id: str, request: Request, file: UploadFile = File(...)) -> UploadResponse:
     if file.filename is None:
         raise HTTPException(status_code=400, detail="A filename is required")
+
+    user_id = _get_user_id(request)
+    _ensure_project_ownership(project_id, user_id)
 
     if PERSISTENCE_MODE == "database":
         with SessionLocal() as db:

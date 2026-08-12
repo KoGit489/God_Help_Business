@@ -12,6 +12,7 @@ class ProjectRecord(Base):
     __tablename__ = "projects"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(128), nullable=False, default="demo-user")
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     status: Mapped[str] = mapped_column(String(64), nullable=False, default="draft")
@@ -30,6 +31,9 @@ class PinRecord(Base):
     heading: Mapped[float] = mapped_column(Float, nullable=False)
     captured_on: Mapped[str] = mapped_column(String(64), nullable=False)
     photo_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    media_type: Mapped[str | None] = mapped_column(String(64), nullable=True, default="photo")
+    native_file_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    thumbnail_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     project: Mapped[ProjectRecord] = relationship(back_populates="pins")
 

@@ -11,8 +11,14 @@ function setReviewStatus(message) {
   }
 }
 
-async function apiRequest(path, options) {
-  const response = await fetch(`${apiBase}${path}`, options);
+function buildHeaders(options = {}) {
+  const headers = new Headers(options.headers || {});
+  headers.set('x-user-id', 'demo');
+  return headers;
+}
+
+async function apiRequest(path, options = {}) {
+  const response = await fetch(`${apiBase}${path}`, { ...options, headers: buildHeaders(options) });
   const payload = await response.json().catch(() => null);
   if (!response.ok) {
     const apiMessage = payload?.error?.message || `Request failed with status ${response.status}`;
@@ -126,7 +132,19 @@ async function renderProject(projectId) {
     }
 
     pinList.innerHTML = project.pins
-      .map((pin) => `<li><strong>${pin.captured_on}</strong> — heading ${pin.heading}° · ${pin.photo_key || 'no photo'}</li>`)
+      .map((pin) => `
+        <li>
+          <div class="pin-card">
+            <div class="mini-map" style="--heading:${pin.heading || 0}deg"></div>
+            <div>
+              <strong>${pin.captured_on}</strong><br />
+              <span class="muted">Heading ${pin.heading || 0}° · ${pin.media_type || 'photo'}</span><br />
+              <span class="muted">${pin.latitude}, ${pin.longitude}</span><br />
+              <span class="muted">${pin.photo_key || pin.native_file_key || 'No media stored'}</span>
+            </div>
+          </div>
+        </li>
+      `)
       .join('');
   } catch (error) {
     document.getElementById('review-summary').innerHTML = `Unable to load review: ${error.message}`;

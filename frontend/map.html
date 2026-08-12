@@ -5,36 +5,212 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Field Capture Map</title>
     <style>
-      body { font-family: Arial, sans-serif; margin: 2rem; background: #f8fafc; }
-      .card { max-width: 860px; margin: 0 auto; padding: 1.25rem; background: white; border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.06); }
-      .map-surface { border: 1px solid #e2e8f0; border-radius: 10px; min-height: 260px; padding: 1rem; margin-top: 1rem; background: linear-gradient(135deg, #eff6ff, #f8fafc); }
-      .controls { display: grid; gap: 0.7rem; margin-top: 1rem; }
-      input, button, select, textarea { padding: 0.7rem; border-radius: 6px; border: 1px solid #cbd5e1; font-size: 1rem; }
-      button { background: #2563eb; color: white; cursor: pointer; }
-      .summary { margin-top: 1rem; padding: 0.9rem; background: #f8fafc; border-radius: 8px; border: 1px solid #e2e8f0; }
-      code { background: #f1f5f9; padding: 0.2rem 0.4rem; border-radius: 4px; }
+      :root {
+        color-scheme: light;
+      }
+      * { box-sizing: border-box; }
+      body {
+        font-family: Arial, sans-serif;
+        margin: 0;
+        background: linear-gradient(180deg, #eef6ff 0%, #f8fafc 100%);
+        color: #0f172a;
+      }
+      .card {
+        max-width: 500px;
+        margin: 0 auto;
+        padding: 0.9rem;
+        background: rgba(255,255,255,0.96);
+        border-radius: 18px;
+        box-shadow: 0 12px 30px rgba(15, 23, 42, 0.08);
+      }
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 0.6rem;
+      }
+      .badge {
+        display: inline-block;
+        background: #dbeafe;
+        color: #1d4ed8;
+        border-radius: 999px;
+        padding: 0.35rem 0.65rem;
+        font-size: 0.75rem;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+      .map-surface {
+        position: relative;
+        border: 1px solid #dbeafe;
+        border-radius: 16px;
+        min-height: 240px;
+        margin-top: 0.7rem;
+        background:
+          linear-gradient(rgba(148,163,184,0.4) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(148,163,184,0.4) 1px, transparent 1px),
+          linear-gradient(135deg, #dbeafe 0%, #eff6ff 35%, #f8fafc 100%);
+        background-size: 24px 24px, 24px 24px, 100% 100%;
+        overflow: hidden;
+        cursor: crosshair;
+      }
+      .map-dot {
+        position: absolute;
+        width: 18px;
+        height: 18px;
+        background: #ef4444;
+        border-radius: 50%;
+        border: 3px solid white;
+        box-shadow: 0 4px 10px rgba(239,68,68,0.5);
+        transform: translate(-50%, -50%);
+      }
+      .map-label {
+        position: absolute;
+        left: 0.8rem;
+        top: 0.8rem;
+        padding: 0.35rem 0.55rem;
+        border-radius: 999px;
+        background: rgba(255,255,255,0.8);
+        border: 1px solid #dbeafe;
+        font-size: 0.78rem;
+        color: #1e3a8a;
+      }
+      .controls {
+        display: grid;
+        gap: 0.7rem;
+        margin-top: 1rem;
+      }
+      input, button, select, textarea {
+        width: 100%;
+        padding: 0.8rem 0.75rem;
+        border-radius: 10px;
+        border: 1px solid #cbd5e1;
+        font-size: 1rem;
+      }
+      button {
+        background: #2563eb;
+        color: white;
+        cursor: pointer;
+        font-weight: 600;
+      }
+      .secondary {
+        background: #0f766e;
+      }
+      .summary {
+        margin-top: 0.2rem;
+        padding: 0.85rem;
+        background: #f8fafc;
+        border-radius: 10px;
+        border: 1px solid #e2e8f0;
+      }
+      .mini-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0.6rem;
+      }
+      .label {
+        font-size: 0.8rem;
+        color: #475569;
+        margin-bottom: 0.25rem;
+      }
+      .photo-preview {
+        display: none;
+        width: 100%;
+        max-height: 180px;
+        object-fit: cover;
+        border-radius: 12px;
+        margin-top: 0.7rem;
+        border: 1px solid #dbeafe;
+      }
+      .heading-row {
+        display: grid;
+        grid-template-columns: 1fr 70px;
+        gap: 0.6rem;
+        align-items: center;
+      }
+      @media (max-width: 420px) {
+        .card { padding: 0.8rem; border-radius: 14px; }
+        .mini-grid { grid-template-columns: 1fr; }
+      }
     </style>
   </head>
   <body>
     <div class="card">
-      <h1>Field Capture Map</h1>
-      <p>This starter map view represents the Phase 2 capture experience for placing pins, setting heading, and uploading photos.</p>
-      <div class="map-surface">
-        <p><strong>Map placeholder</strong></p>
-        <p>Select a project, place a point on the map conceptually, and capture the inspection details.</p>
-        <p>Project: <select id="project-select"></select></p>
-        <p>Latitude: <input id="latitude" value="5.6037" /></p>
-        <p>Longitude: <input id="longitude" value="-0.1870" /></p>
-        <p>Heading: <input id="heading" value="35" /></p>
-        <p>Capture date: <input id="captured_on" value="2026-08-08" /></p>
-        <p>Photo: <input id="photo" type="file" /></p>
+      <div class="topbar">
+        <h2 style="margin: 0;">Field capture</h2>
+        <span class="badge">mobile</span>
       </div>
+
+      <div class="mini-grid">
+        <div>
+          <div class="label">Project</div>
+          <select id="project-select"></select>
+        </div>
+        <div>
+          <div class="label">Media</div>
+          <select id="media-type">
+            <option value="photo">Photo</option>
+            <option value="insta360">Insta 360</option>
+          </select>
+        </div>
+      </div>
+
+      <div id="map-surface" class="map-surface" aria-label="Map area for choosing a pin location">
+        <div class="map-label">Tap to set location</div>
+        <div id="map-dot" class="map-dot" style="left: 50%; top: 50%;"></div>
+      </div>
+
+      <div class="mini-grid" style="margin-top:0.7rem;">
+        <div>
+          <div class="label">Latitude</div>
+          <input id="latitude" value="5.6037" />
+        </div>
+        <div>
+          <div class="label">Longitude</div>
+          <input id="longitude" value="-0.1870" />
+        </div>
+      </div>
+
+      <div class="heading-row" style="margin-top:0.7rem;">
+        <div>
+          <div class="label">Heading</div>
+          <input id="heading" type="range" min="0" max="360" value="35" />
+        </div>
+        <div>
+          <div class="label">&nbsp;</div>
+          <input id="heading-readout" value="35°" style="text-align:center;" />
+        </div>
+      </div>
+
+      <div style="margin-top:0.7rem;">
+        <div class="label">Capture date</div>
+        <input id="captured_on" value="2026-08-08" />
+      </div>
+
+      <div style="margin-top:0.7rem;">
+        <div class="label">Photo or 360 capture</div>
+        <input id="photo" type="file" accept="image/*,.insp" />
+      </div>
+      <img id="photo-preview" class="photo-preview" alt="Selected media preview" />
+
+      <div style="margin-top:0.7rem;">
+        <div class="label">Native file key (optional)</div>
+        <input id="native-file-key" placeholder="raw/360/clip.insp" />
+      </div>
+
+      <div style="margin-top:0.7rem;">
+        <div class="label">Thumbnail key (optional)</div>
+        <input id="thumbnail-key" placeholder="thumbs/360/clip.jpg" />
+      </div>
+
       <div class="controls">
-        <button id="capture-btn">Capture pin</button>
+        <button id="capture-btn">Save pin</button>
+        <button id="review-btn" class="secondary" type="button" onclick="window.location.href='review.html'">Open review</button>
         <div id="message" class="summary">Ready to capture.</div>
         <div id="recent-pins" class="summary"></div>
       </div>
     </div>
+
     <script src="map.js"></script>
   </body>
 </html>
