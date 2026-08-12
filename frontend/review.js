@@ -11,6 +11,20 @@ function setReviewStatus(message) {
   }
 }
 
+function renderOnboardingChecklist(project) {
+  const checklist = document.getElementById('onboarding-checklist');
+  if (!checklist) return;
+
+  const items = [
+    { label: 'Project created and titled', done: Boolean(project && project.title) },
+    { label: 'Technician confirmed location + heading', done: Boolean(project && project.pin_count > 0) },
+    { label: 'Native 360 file preserved when needed', done: Boolean(project && project.pins && project.pins.some((pin) => pin.native_file_key || pin.media_type === 'insta360')) },
+    { label: 'Share link generated for review', done: Boolean(activeShareToken) },
+  ];
+
+  checklist.innerHTML = items.map((item) => `<li class="${item.done ? 'done' : 'pending'}">${item.done ? '✓' : '•'} ${item.label}</li>`).join('');
+}
+
 function buildHeaders(options = {}) {
   const headers = new Headers(options.headers || {});
   headers.set('x-user-id', 'demo');
@@ -92,8 +106,25 @@ async function createShareLink() {
     activeShareToken = payload.share_token;
     document.getElementById('share-box').style.display = 'block';
     document.getElementById('share-link-text').innerHTML = `<a href="${payload.share_link}" target="_blank">${payload.share_link}</a>`;
+    document.getElementById('copy-share-link').style.display = 'inline-block';
+    renderOnboardingChecklist({ title: 'Project', pin_count: 0, pins: [] });
   } catch (error) {
     setReviewStatus(`Unable to create share link: ${error.message}`);
+  }
+}
+
+async function copyShareLink() {
+  const shareLink = document.getElementById('share-link-text').textContent.trim();
+  if (!shareLink) {
+    setReviewStatus('Create a share link before copying it.');
+    return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(shareLink);
+    setReviewStatus('Share link copied to the clipboard.');
+  } catch (error) {
+    setReviewStatus('Copy failed. You can still open the share link manually.');
   }
 }
 
@@ -125,6 +156,7 @@ async function renderProject(projectId) {
     const query = activeShareToken ? `?share_token=${encodeURIComponent(activeShareToken)}` : '';
     const project = await apiRequest(`/projects/${projectId}/review${query}`);
     document.getElementById('review-summary').innerHTML = `<div class="status-pill">${project.status}</div><strong>${project.title}</strong><br />${project.description || 'No description'}<br /><span>${project.pin_count} pins captured</span>`;
+    renderOnboardingChecklist(project);
 
     if (!project.pins.length) {
       pinList.innerHTML = '<li>No pins yet for this project.</li>';
@@ -154,6 +186,7 @@ async function renderProject(projectId) {
 
 document.getElementById('create-review-project').addEventListener('click', createReviewProject);
 document.getElementById('create-share-link').addEventListener('click', createShareLink);
+document.getElementById('copy-share-link').addEventListener('click', copyShareLink);
 document.getElementById('mark-ready').addEventListener('click', markReadyForReview);
 
 loadProjectList();

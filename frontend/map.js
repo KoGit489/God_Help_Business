@@ -10,9 +10,72 @@ const headingInput = document.getElementById('heading');
 const headingReadout = document.getElementById('heading-readout');
 const photoInput = document.getElementById('photo');
 const photoPreview = document.getElementById('photo-preview');
+const nativeCameraMode = document.getElementById('camera-mode');
+const nativeUploadInput = document.getElementById('native-file-upload');
+const nativePathLabel = document.getElementById('native-file-name');
+const nativePreviewBody = document.getElementById('native-preview-body');
+const mediaTypeSelect = document.getElementById('media-type');
+const captureModePill = document.getElementById('capture-mode-pill');
+const nativeStatusPill = document.getElementById('native-status-pill');
+const useLocationButton = document.getElementById('use-location-btn');
 
 function setMessage(text) {
   message.textContent = text;
+}
+
+function renderNativeUploadPreview(file) {
+  if (!file) {
+    nativePathLabel.textContent = 'No native file selected';
+    nativePreviewBody.innerHTML = '<div class="native-placeholder">Upload an Insta360 X5 file or image to preview it here without blocking the browser testing flow.</div>';
+    nativeStatusPill.textContent = 'Native file: optional';
+    return;
+  }
+
+  nativeStatusPill.textContent = 'Native file: saved';
+
+  nativePathLabel.textContent = file.name;
+  const isInsta360Native = /\.insp$/i.test(file.name) || /octet-stream|zip/i.test(file.type || '');
+  const isImage = file.type.startsWith('image/');
+
+  if (isImage) {
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      nativePreviewBody.innerHTML = `<img class="native-preview-image" src="${event.target?.result || ''}" alt="360 preview" />`;
+    };
+    reader.readAsDataURL(file);
+    return;
+  }
+
+  if (isInsta360Native) {
+    nativePreviewBody.innerHTML = `
+      <div class="native-placeholder">
+        Native Insta360 X5 file preserved for upload.<br />
+        <strong>${file.name}</strong><br />
+        Browser testing remains available while the original capture is kept intact.
+      </div>
+    `;
+    return;
+  }
+
+  nativePreviewBody.innerHTML = `<div class="native-placeholder">Preview is available for image files. Native capture is preserved for later processing: <strong>${file.name}</strong></div>`;
+}
+
+async function loadCameraStatus() {
+  try {
+    const status = await apiRequest('/camera/insta360/status');
+    nativeCameraMode.textContent = `Camera mode: ${status.mode}`;
+    captureModePill.textContent = status.mode === 'sdk' ? 'Mode: direct SDK' : 'Mode: browser';
+    if (!status.supports_web_browser) {
+      setMessage('Web browser capture is not enabled for this camera configuration.');
+    }
+    if (status.mode === 'manual_upload') {
+      mediaTypeSelect.value = 'insta360';
+    }
+  } catch (error) {
+    nativeCameraMode.textContent = 'Camera mode: unavailable';
+    captureModePill.textContent = 'Mode: browser';
+    setMessage(`Camera status unavailable: ${error.message}`);
+  }
 }
 
 function updateHeadingReadout(value) {
@@ -52,6 +115,33 @@ function setMapPositionFromClick(event) {
   mapDot.style.left = `${ratioX * 100}%`;
   mapDot.style.top = `${ratioY * 100}%`;
   setMessage('Location pinned on the map.');
+}
+
+function setCurrentLocation() {
+  if (!navigator.geolocation) {
+    setMessage('This phone browser does not support GPS location lookup.');
+    return;
+  }
+
+  setMessage('Finding your current location...');
+  navigator.geolocation.getCurrentPosition(
+    (position) => {
+      const latitude = position.coords.latitude;
+      const longitude = position.coords.longitude;
+      document.getElementById('latitude').value = latitude.toFixed(5);
+      document.getElementById('longitude').value = longitude.toFixed(5);
+      const rect = mapSurface.getBoundingClientRect();
+      const ratioX = ((longitude + 0.24) / 0.02) * 0.8 + 0.1;
+      const ratioY = (0.6 - ((latitude - 5.55) / 0.02) * 0.8);
+      mapDot.style.left = `${Math.min(Math.max(ratioX * 100, 0), 100)}%`;
+      mapDot.style.top = `${Math.min(Math.max(ratioY * 100, 0), 100)}%`;
+      setMessage('Current location loaded successfully.');
+    },
+    () => {
+      setMessage('Location permission was blocked. You can still tap the map to set the location manually.');
+    },
+    { enableHighAccuracy: true, timeout: 15000 }
+  );
 }
 
 function renderPhotoPreview(file) {
@@ -133,6 +223,7 @@ async function capturePin() {
   const nativeFileKey = document.getElementById('native-file-key').value.trim();
   const thumbnailKey = document.getElementById('thumbnail-key').value.trim();
   const photoInputFile = photoInput.files && photoInput.files[0];
+  const nativeUploadFile = nativeUploadInput.files && nativeUploadInput.files[0];
 
   if (!projectId || projectId === 'Create a project first') {
     setMessage('Create a project first before capturing a pin.');
@@ -162,8 +253,18 @@ async function capturePin() {
       const formData = new FormData();
       formData.append('file', photoInputFile);
       const upload = await apiRequest(`/projects/${projectId}/pins/${pin.id}/upload`, { method: 'POST', body: formData });
+      pin.photo_key = upload.photo_key;
       setMessage(`Pin saved and uploaded: ${upload.photo_key}`);
-    } else {
+    }
+
+    if (nativeUploadFile) {
+      setMessage('Uploading native 360 capture...');
+      const formData = new FormData();
+      formData.append('file', nativeUploadFile);
+      const nativeUpload = await apiRequest(`/projects/${projectId}/pins/${pin.id}/native-upload`, { method: 'POST', body: formData });
+      pin.native_file_key = nativeUpload.native_file_key;
+      setMessage(`Pin saved with native capture: ${nativeUpload.native_file_key}`);
+    } else if (!photoInputFile) {
       setMessage(`Pin saved without a file: ${pin.id}`);
     }
 
@@ -176,8 +277,13 @@ async function capturePin() {
 mapSurface.addEventListener('click', setMapPositionFromClick);
 headingInput.addEventListener('input', (event) => updateHeadingReadout(event.target.value));
 photoInput.addEventListener('change', (event) => renderPhotoPreview(event.target.files?.[0] || null));
+nativeUploadInput.addEventListener('change', (event) => renderNativeUploadPreview(event.target.files?.[0] || null));
+useLocationButton.addEventListener('click', setCurrentLocation);
 document.getElementById('capture-btn').addEventListener('click', capturePin);
 document.getElementById('project-select').addEventListener('change', (event) => loadRecentPins(event.target.value));
 
+document.getElementById('captured_on').value = new Date().toISOString().slice(0, 10);
 updateHeadingReadout(headingInput.value);
+renderNativeUploadPreview(null);
+loadCameraStatus();
 loadProjects();

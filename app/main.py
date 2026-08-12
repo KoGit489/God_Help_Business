@@ -17,12 +17,15 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.camera_adapter import Insta360CameraAdapter
 from app.models import Base, PinRecord, ProjectRecord, ShareLinkRecord
 
 load_dotenv()
 
 logger = logging.getLogger("god_help_business.api")
 logging.basicConfig(level=logging.INFO)
+
+camera_adapter = Insta360CameraAdapter()
 
 PERSISTENCE_MODE = os.getenv("APP_PERSISTENCE", "memory").strip().lower()
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./god_help_business.db")
@@ -120,6 +123,22 @@ class ProjectDetailResponse(BaseModel):
 class UploadResponse(BaseModel):
     id: str
     photo_key: str
+
+
+class NativeUploadResponse(BaseModel):
+    id: str
+    native_file_key: str
+    photo_key: str | None = None
+
+
+class CameraStatusResponse(BaseModel):
+    mode: str
+    supports_web_browser: bool = True
+    supports_native_app: bool = False
+    sdk_available: bool = False
+    supports_direct_sdk: bool = False
+    browser_upload_supported: bool = True
+    recommended_action: str
 
 
 class ShareLinkResponse(BaseModel):
@@ -248,6 +267,37 @@ def _store_photo(project_id: str, pin_id: str, upload: UploadFile) -> str:
         shutil.copyfileobj(upload.file, handle)
 
     return photo_key
+
+
+def _store_native_file(project_id: str, pin_id: str, upload: UploadFile) -> str:
+    filename = Path(upload.filename or "capture.bin").name
+    native_key = f"uploads/{project_id}/{pin_id}/native/{filename}"
+
+    if STORAGE_BACKEND == "s3":
+        try:
+            import boto3
+        except ImportError as exc:
+            raise HTTPException(status_code=500, detail="boto3 is required for S3 storage backend") from exc
+
+        bucket = os.getenv("S3_BUCKET")
+        region = os.getenv("S3_REGION")
+        endpoint_url = os.getenv("S3_ENDPOINT_URL")
+        if not bucket:
+            raise HTTPException(status_code=500, detail="S3_BUCKET is required for S3 storage backend")
+
+        s3_client = boto3.client("s3", region_name=region, endpoint_url=endpoint_url)
+        upload.file.seek(0)
+        s3_client.upload_fileobj(upload.file, bucket, native_key)
+        return native_key
+
+    destination = UPLOAD_DIR / project_id / pin_id / "native"
+    destination.mkdir(parents=True, exist_ok=True)
+    output_file = destination / filename
+    upload.file.seek(0)
+    with output_file.open("wb") as handle:
+        shutil.copyfileobj(upload.file, handle)
+
+    return native_key
 
 
 def _pin_response_from_record(record: PinRecord) -> PinResponse:
@@ -495,6 +545,25 @@ def get_current_user(request: Request) -> AuthUserResponse:
         email="demo@God_Help_Business.local",
         name="Demo Builder",
     )
+
+
+@app.get("/camera/insta360/status", response_model=CameraStatusResponse, tags=["camera"])
+def camera_status() -> CameraStatusResponse:
+    status = camera_adapter.status()
+    return CameraStatusResponse(
+        mode=status.mode,
+        supports_web_browser=status.supports_web_browser,
+        supports_native_app=status.supports_native_app,
+        sdk_available=status.sdk_available,
+        supports_direct_sdk=status.supports_direct_sdk,
+        browser_upload_supported=status.browser_upload_supported,
+        recommended_action=status.recommended_action,
+    )
+
+
+@app.get("/camera/insta360/adapter", tags=["camera"])
+def camera_adapter_status() -> dict[str, object]:
+    return camera_adapter.status().as_dict()
 
 
 @app.post("/projects", response_model=ProjectResponse, status_code=201, tags=["projects"])
@@ -771,3 +840,40 @@ def upload_pin_photo(project_id: str, pin_id: str, request: Request, file: Uploa
     photo_key = _store_photo(project_id, pin_id, file)
     pin["photo_key"] = photo_key
     return UploadResponse(id=pin_id, photo_key=photo_key)
+
+
+@app.post("/projects/{project_id}/pins/{pin_id}/native-upload", response_model=NativeUploadResponse, tags=["pins"])
+def upload_pin_native_file(project_id: str, pin_id: str, request: Request, file: UploadFile = File(...)) -> NativeUploadResponse:
+    if file.filename is None:
+        raise HTTPException(status_code=400, detail="A filename is required")
+
+    user_id = _get_user_id(request)
+    _ensure_project_ownership(project_id, user_id)
+
+    if PERSISTENCE_MODE == "database":
+        with SessionLocal() as db:
+            project = db.get(ProjectRecord, project_id)
+            if not project:
+                raise HTTPException(status_code=404, detail="Project not found")
+
+            pin = db.get(PinRecord, pin_id)
+            if not pin or pin.project_id != project_id:
+                raise HTTPException(status_code=404, detail="Pin not found")
+
+            native_key = _store_native_file(project_id, pin_id, file)
+            pin.native_file_key = native_key
+            pin.media_type = pin.media_type or "insta360"
+            db.commit()
+            return NativeUploadResponse(id=pin_id, native_file_key=native_key, photo_key=pin.photo_key)
+
+    if project_id not in projects:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    pin = pins_by_id.get(pin_id)
+    if not pin or pin["project_id"] != project_id:
+        raise HTTPException(status_code=404, detail="Pin not found")
+
+    native_key = _store_native_file(project_id, pin_id, file)
+    pin["native_file_key"] = native_key
+    pin["media_type"] = pin.get("media_type") or "insta360"
+    return NativeUploadResponse(id=pin_id, native_file_key=native_key, photo_key=pin.get("photo_key"))

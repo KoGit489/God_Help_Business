@@ -14,6 +14,16 @@
       button.secondary { background: #0f766e; }
       .summary-grid { display: grid; gap: 0.75rem; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); margin-bottom: 1rem; }
       .summary-box { border: 1px solid #e2e8f0; border-radius: 10px; padding: 0.85rem; background: #f8fafc; }
+      .workflow-banner {
+        margin-top: 1rem;
+        border: 1px solid #dbeafe;
+        border-radius: 12px;
+        padding: 0.9rem 1rem;
+        background: linear-gradient(180deg, #eff6ff 0%, #f8fbff 100%);
+        color: #1e3a8a;
+      }
+      .workflow-banner strong { display: block; margin-bottom: 0.2rem; }
+      .checklist { display: grid; gap: 0.5rem; padding-left: 1.1rem; margin: 0.8rem 0 0; }
       code { background: #f6f8fa; padding: 0.2rem 0.4rem; border-radius: 4px; }
       ul { padding-left: 1.2rem; }
       li { margin-bottom: 0.4rem; }
@@ -26,6 +36,16 @@
       <div class="toolbar">
         <a href="map.html"><button type="button">Open capture view</button></a>
         <a href="review.html"><button type="button" class="secondary">Open review view</button></a>
+      </div>
+
+      <div class="workflow-banner">
+        <strong>Browser-first field workflow is ready</strong>
+        This setup is optimized for Insta360 X5 testing without blocking on a native app. Use the browser capture flow, keep native .insp files when supplied, and review/share from the project dashboard.
+        <ul class="checklist">
+          <li>Capture location, heading, and media in one step</li>
+          <li>Preserve native 360 files for later upload or processing</li>
+          <li>Review evidence and create a share link for stakeholders</li>
+        </ul>
       </div>
 
       <div class="summary-grid">

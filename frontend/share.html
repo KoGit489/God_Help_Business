@@ -5,10 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Shared Review</title>
     <style>
-      body { font-family: Arial, sans-serif; margin: 2rem; background: #f8fafc; color: #0f172a; }
+      body { font-family: Arial, sans-serif; margin: 2rem; background: linear-gradient(180deg, #eff6ff 0%, #f8fafc 100%); color: #0f172a; }
       .card { max-width: 760px; margin: 0 auto; padding: 1.25rem; background: white; border-radius: 16px; box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08); }
       .pill { display: inline-block; padding: 0.35rem 0.6rem; border-radius: 999px; background: #ecfeff; color: #0f766e; font-size: 0.9rem; }
       .panel { margin-top: 1rem; padding: 1rem; border: 1px solid #e2e8f0; border-radius: 12px; background: #fcfdff; }
+      .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0.7rem; margin-top: 1rem; }
+      .summary-box { padding: 0.75rem; border-radius: 10px; border: 1px solid #dbeafe; background: #f8fbff; }
+      button { width: 100%; margin-top: 0.8rem; padding: 0.75rem; border: 0; border-radius: 10px; background: #2563eb; color: white; font-weight: 700; cursor: pointer; }
       ul { padding-left: 1.2rem; }
     </style>
   </head>
@@ -17,10 +20,16 @@
       <div class="pill">Shared project review</div>
       <h1 id="title">Loading shared project...</h1>
       <p id="description" class="muted"></p>
+      <div class="summary-grid">
+        <div class="summary-box"><strong id="status-pill">Status</strong><br /><span id="project-status">Loading...</span></div>
+        <div class="summary-box"><strong>Captures</strong><br /><span id="capture-count">0</span></div>
+        <div class="summary-box"><strong>Heading</strong><br /><span id="heading-summary">—</span></div>
+      </div>
       <div class="panel">
         <h2>Captured evidence</h2>
         <ul id="pins"></ul>
       </div>
+      <button id="copy-link-btn" type="button">Copy review link</button>
     </div>
     <script>
       const apiBase = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
@@ -34,6 +43,9 @@
         const title = document.getElementById('title');
         const description = document.getElementById('description');
         const pins = document.getElementById('pins');
+        const statusBox = document.getElementById('project-status');
+        const captureCount = document.getElementById('capture-count');
+        const headingSummary = document.getElementById('heading-summary');
 
         if (!token) {
           title.textContent = 'This review link is missing a token.';
@@ -57,12 +69,18 @@
 
           title.textContent = payload.title;
           description.textContent = payload.description || 'No description provided.';
+          statusBox.textContent = payload.status || 'draft';
+          captureCount.textContent = String(payload.pins.length || 0);
+          headingSummary.textContent = payload.pins.length ? `${payload.pins[0].heading || 0}°` : '—';
+
           if (!payload.pins.length) {
             pins.innerHTML = '<li>No evidence has been captured for this project yet.</li>';
             return;
           }
           pins.innerHTML = payload.pins
-            .map((pin) => `<li><strong>${pin.captured_on}</strong> — heading ${pin.heading}° · ${pin.photo_key || 'no photo'}</li>`)
+            .map((pin) => 
+              `<li><strong>${pin.captured_on}</strong> — heading ${pin.heading || 0}° · ${pin.latitude}, ${pin.longitude} · ${pin.photo_key || pin.native_file_key || 'no media file'}</li>`
+            )
             .join('');
         } catch (error) {
           title.textContent = 'Unable to load shared project.';
@@ -70,6 +88,15 @@
           pins.innerHTML = '<li>Could not load evidence.</li>';
         }
       }
+
+      document.getElementById('copy-link-btn').addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(window.location.href);
+          document.getElementById('title').textContent = 'Review link copied';
+        } catch (error) {
+          document.getElementById('title').textContent = 'Review link ready';
+        }
+      });
 
       loadSharedProject();
     </script>

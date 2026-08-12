@@ -132,3 +132,59 @@ def test_pin_accepts_360_native_media_metadata() -> None:
     assert payload["media_type"] == "insta360"
     assert payload["native_file_key"] == "raw/360/clip.insp"
     assert payload["thumbnail_key"] == "thumbs/360/clip.jpg"
+
+
+def test_manual_insta360_native_upload_is_supported() -> None:
+    reset_demo_store()
+
+    project = client.post(
+        "/projects",
+        json={"title": "Manual Upload Site", "description": "360 upload workflow"},
+        headers={"X-User-Id": "user-alpha"},
+    ).json()
+
+    pin = client.post(
+        f"/projects/{project['id']}/pins",
+        json={
+            "latitude": 5.6134,
+            "longitude": -0.1821,
+            "heading": 220.0,
+            "captured_on": "2026-08-11",
+            "photo_key": "photos/manual.jpg",
+            "media_type": "insta360",
+        },
+        headers={"X-User-Id": "user-alpha"},
+    ).json()
+
+    upload_response = client.post(
+        f"/projects/{project['id']}/pins/{pin['id']}/native-upload",
+        files={"file": ("capture.insp", b"fake-insta360-file", "application/octet-stream")},
+        headers={"X-User-Id": "user-alpha"},
+    )
+
+    assert upload_response.status_code == 200
+    payload = upload_response.json()
+    assert payload["native_file_key"].endswith("capture.insp")
+
+
+def test_camera_status_exposes_browser_ready_mode() -> None:
+    reset_demo_store()
+
+    response = client.get("/camera/insta360/status")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["mode"] in {"manual_upload", "sdk"}
+    assert payload["supports_web_browser"] is True
+    assert payload["supports_native_app"] in {True, False}
+
+
+def test_camera_adapter_reports_sdk_wiring_readiness() -> None:
+    reset_demo_store()
+
+    response = client.get("/camera/insta360/adapter")
+    assert response.status_code == 200
+    payload = response.json()
+    assert "mode" in payload
+    assert "supports_direct_sdk" in payload
+    assert "recommended_action" in payload
+    assert "real_time_feed_supported" in payload
