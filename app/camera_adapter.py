@@ -24,7 +24,7 @@ class CameraAdapterStatus:
 
 
 class Insta360CameraAdapter:
-    """Thin adapter layer for the Insta360 X5 capture flow.
+    """Thin adapter layer for the Insta360 ONE X2 capture flow.
 
     The app keeps the browser workflow as the default and makes any direct SDK
     integration opt-in via environment configuration. This avoids blocking web-based
@@ -90,7 +90,7 @@ class Insta360CameraAdapter:
                 manual_upload_supported=True,
                 real_time_feed_supported=False,
                 integration_ready=False,
-                recommended_action="Keep the browser workflow active. Native app support is optional and should not block the X5 testing path.",
+                recommended_action="Keep the browser workflow active. Native app support is optional and should not block the ONE X2 testing path.",
                 reason="Native app support is enabled, but direct SDK access is not configured.",
             )
 
