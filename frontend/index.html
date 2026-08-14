@@ -3,10 +3,12 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>God_Help_Business MVP</title>
+    <title>CASAI MVP</title>
     <style>
       body { font-family: Arial, sans-serif; margin: 2rem; line-height: 1.5; background: #f7f9fc; color: #111827; }
       .card { border: 1px solid #d0d7de; border-radius: 12px; padding: 1.25rem; max-width: 860px; background: white; box-shadow: 0 8px 24px rgba(0,0,0,0.05); }
+      .title-row { display: flex; align-items: center; gap: 1rem; margin-bottom: 0.5rem; }
+      .brand-logo { width: 84px; height: 84px; object-fit: contain; border-radius: 12px; background: #fff; border: 1px solid #e2e8f0; padding: 0.35rem; }
       .toolbar { display: flex; gap: 0.75rem; flex-wrap: wrap; margin: 1rem 0 1.25rem; }
       form { display: grid; gap: 0.75rem; margin-top: 1rem; }
       input, button { padding: 0.7rem; font-size: 1rem; border-radius: 6px; border: 1px solid #cbd5e1; }
@@ -27,11 +29,18 @@
       code { background: #f6f8fa; padding: 0.2rem 0.4rem; border-radius: 4px; }
       ul { padding-left: 1.2rem; }
       li { margin-bottom: 0.4rem; }
+      @media (max-width: 520px) {
+        .title-row { align-items: flex-start; }
+        .brand-logo { width: 64px; height: 64px; }
+      }
     </style>
   </head>
   <body>
     <div class="card">
-      <h1>God_Help_Business MVP</h1>
+      <div class="title-row">
+        <img class="brand-logo" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABQAAAAUCAYAAAAFj8KsAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJ0UkGAAAAAElFTkSuQmCC" alt="CASAI logo" />
+        <h1>CASAI MVP</h1>
+      </div>
       <p>This dashboard acts as the central operating view for creating projects, capturing field evidence, and steering reviews toward a clean Phase 3 experience.</p>
       <div class="toolbar">
         <a href="map.html"><button type="button">Open capture view</button></a>
