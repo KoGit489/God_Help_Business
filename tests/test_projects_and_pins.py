@@ -188,3 +188,21 @@ def test_camera_adapter_reports_sdk_wiring_readiness() -> None:
     assert "supports_direct_sdk" in payload
     assert "recommended_action" in payload
     assert "real_time_feed_supported" in payload
+
+
+def test_browser_frontend_and_cors_are_available() -> None:
+    reset_demo_store()
+
+    index_response = client.get("/index.html")
+    assert index_response.status_code == 200
+    assert "God_Help_Business MVP" in index_response.text
+
+    preflight = client.options(
+        "/projects",
+        headers={
+            "Origin": "http://192.168.1.10:8000",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+    assert preflight.status_code == 200
+    assert preflight.headers.get("access-control-allow-origin") in {"*", "http://192.168.1.10:8000"}

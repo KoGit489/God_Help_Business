@@ -11,7 +11,9 @@ from uuid import uuid4
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import create_engine, select
 from sqlalchemy.exc import SQLAlchemyError
@@ -24,6 +26,9 @@ load_dotenv()
 
 logger = logging.getLogger("god_help_business.api")
 logging.basicConfig(level=logging.INFO)
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+FRONTEND_DIR = BASE_DIR / "frontend"
 
 camera_adapter = Insta360CameraAdapter()
 
@@ -52,6 +57,14 @@ app = FastAPI(
     version="0.2.0",
     description="Backend scaffold for a construction field capture MVP.",
     lifespan=lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
@@ -877,3 +890,34 @@ def upload_pin_native_file(project_id: str, pin_id: str, request: Request, file:
     pin["native_file_key"] = native_key
     pin["media_type"] = pin.get("media_type") or "insta360"
     return NativeUploadResponse(id=pin_id, native_file_key=native_key, photo_key=pin.get("photo_key"))
+
+
+@app.get("/index.html")
+def serve_index() -> FileResponse:
+    return FileResponse(FRONTEND_DIR / "index.html")
+
+
+@app.get("/map.html")
+def serve_map() -> FileResponse:
+    return FileResponse(FRONTEND_DIR / "map.html")
+
+
+@app.get("/review.html")
+def serve_review() -> FileResponse:
+    return FileResponse(FRONTEND_DIR / "review.html")
+
+
+@app.get("/share.html")
+def serve_share() -> FileResponse:
+    return FileResponse(FRONTEND_DIR / "share.html")
+
+
+@app.get("/{file_name}")
+def serve_static_file(file_name: str) -> FileResponse:
+    candidate = FRONTEND_DIR / file_name
+    if candidate.is_file():
+        return FileResponse(candidate)
+    raise HTTPException(status_code=404, detail="File not found")
+
+
+app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")
