@@ -32,12 +32,60 @@
       <button id="copy-link-btn" type="button">Copy review link</button>
     </div>
     <script>
-      const apiBase = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
-        ? 'http://127.0.0.1:8000'
-        : '/api';
+      function buildApiBases() {
+        const params = new URLSearchParams(window.location.search);
+        const override = params.get('apiBase');
+        if (override) {
+          return [override.replace(/\/$/, '')];
+        }
+
+        if (window.location.protocol === 'file:') {
+          return ['http://127.0.0.1:8000'];
+        }
+
+        const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+        if (isLocalhost) {
+          return ['http://127.0.0.1:8000'];
+        }
+
+        const sameOrigin = window.location.origin.replace(/\/$/, '');
+        const wifiBackend = `${window.location.protocol}//${window.location.hostname}:8000`;
+        const candidates = window.location.port === '5500'
+          ? [wifiBackend, sameOrigin, '/api']
+          : [sameOrigin, '/api'];
+
+        return [...new Set(candidates)];
+      }
+
+      const apiBases = buildApiBases();
 
       const params = new URLSearchParams(window.location.search);
       const token = params.get('token') || window.location.pathname.split('/').pop();
+
+      async function apiRequest(path) {
+        let lastError = null;
+
+        for (const base of apiBases) {
+          try {
+            const response = await fetch(`${base}${path}`);
+            const payload = await response.json().catch(() => null);
+            if (response.ok) {
+              return payload;
+            }
+
+            const apiMessage = payload?.error?.message || `Request failed with status ${response.status}`;
+            if (response.status === 404 && base !== apiBases[apiBases.length - 1]) {
+              lastError = new Error(apiMessage);
+              continue;
+            }
+            throw new Error(apiMessage);
+          } catch (error) {
+            lastError = error;
+          }
+        }
+
+        throw lastError || new Error('Unable to reach the API service.');
+      }
 
       async function loadSharedProject() {
         const title = document.getElementById('title');
@@ -58,14 +106,7 @@
         pins.innerHTML = '<li>Loading captured evidence...</li>';
 
         try {
-          const response = await fetch(`${apiBase}/share/${token}`);
-          const payload = await response.json().catch(() => null);
-          if (!response.ok) {
-            title.textContent = 'This review link is not available.';
-            description.textContent = payload?.error?.message || 'The shared link is invalid or expired.';
-            pins.innerHTML = '<li>No evidence available.</li>';
-            return;
-          }
+          const payload = await apiRequest(`/share/${token}`);
 
           title.textContent = payload.title;
           description.textContent = payload.description || 'No description provided.';
@@ -83,9 +124,10 @@
             )
             .join('');
         } catch (error) {
-          title.textContent = 'Unable to load shared project.';
-          description.textContent = error.message;
-          pins.innerHTML = '<li>Could not load evidence.</li>';
+          const unavailable = /not found|404|invalid share token|share link/i.test(error.message || '');
+          title.textContent = unavailable ? 'This review link is not available.' : 'Unable to load shared project.';
+          description.textContent = unavailable ? 'The shared link is invalid or expired.' : error.message;
+          pins.innerHTML = '<li>No evidence available.</li>';
         }
       }
 

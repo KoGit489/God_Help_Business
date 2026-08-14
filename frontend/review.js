@@ -1,6 +1,29 @@
-const apiBase = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
-  ? 'http://127.0.0.1:8000'
-  : '/api';
+function buildApiBases() {
+  const params = new URLSearchParams(window.location.search);
+  const override = params.get('apiBase');
+  if (override) {
+    return [override.replace(/\/$/, '')];
+  }
+
+  if (window.location.protocol === 'file:') {
+    return ['http://127.0.0.1:8000'];
+  }
+
+  const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+  if (isLocalhost) {
+    return ['http://127.0.0.1:8000'];
+  }
+
+  const sameOrigin = window.location.origin.replace(/\/$/, '');
+  const wifiBackend = `${window.location.protocol}//${window.location.hostname}:8000`;
+  const candidates = window.location.port === '5500'
+    ? [wifiBackend, sameOrigin, '/api']
+    : [sameOrigin, '/api'];
+
+  return [...new Set(candidates)];
+}
+
+const apiBases = buildApiBases();
 let activeProjectId = null;
 let activeShareToken = null;
 
@@ -32,13 +55,28 @@ function buildHeaders(options = {}) {
 }
 
 async function apiRequest(path, options = {}) {
-  const response = await fetch(`${apiBase}${path}`, { ...options, headers: buildHeaders(options) });
-  const payload = await response.json().catch(() => null);
-  if (!response.ok) {
-    const apiMessage = payload?.error?.message || `Request failed with status ${response.status}`;
-    throw new Error(apiMessage);
+  let lastError = null;
+
+  for (const base of apiBases) {
+    try {
+      const response = await fetch(`${base}${path}`, { ...options, headers: buildHeaders(options) });
+      const payload = await response.json().catch(() => null);
+      if (response.ok) {
+        return payload;
+      }
+
+      const apiMessage = payload?.error?.message || `Request failed with status ${response.status}`;
+      if (response.status === 404 && base !== apiBases[apiBases.length - 1]) {
+        lastError = new Error(apiMessage);
+        continue;
+      }
+      throw new Error(apiMessage);
+    } catch (error) {
+      lastError = error;
+    }
   }
-  return payload;
+
+  throw lastError || new Error('Unable to reach the API service.');
 }
 
 async function loadProjectList() {
