@@ -241,3 +241,31 @@ def test_floor_plan_upload_and_pin_position_are_available() -> None:
     assert pin.status_code == 201
     assert pin.json()["position_x"] == 0.25
     assert pin.json()["position_y"] == 0.75
+
+
+def test_capture_processing_boundary_accepts_telemetry_metadata() -> None:
+    reset_demo_store()
+
+    project = client.post("/projects", json={"title": "Telemetry Demo"}).json()
+    pin = client.post(
+        f"/projects/{project['id']}/pins",
+        json={
+            "latitude": 5.56,
+            "longitude": -0.24,
+            "heading": 90,
+            "captured_on": "2026-08-20",
+            "telemetry": {"source": "future_insp_parser", "gyro": {"x": 0.1}},
+        },
+    )
+    assert pin.status_code == 201
+    assert pin.json()["telemetry"]["source"] == "future_insp_parser"
+    assert pin.json()["processing_status"] == "metadata_received"
+
+    status = client.get("/capture-processing/status")
+    assert status.status_code == 200
+    assert status.json()["status"] == "ready"
+    assert "calibrated_dead_reckoning" in status.json()["capabilities"]
+
+    processed = client.post(f"/projects/{project['id']}/pins/{pin.json()['id']}/process")
+    assert processed.status_code == 200
+    assert processed.json()["telemetry_received"] is True

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import json
 import os
 import shutil
 from contextlib import asynccontextmanager
@@ -20,6 +21,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.camera_adapter import Insta360CameraAdapter
+from app.capture_processing import CaptureProcessor
 from app.models import Base, PinRecord, ProjectRecord, ShareLinkRecord
 
 load_dotenv()
@@ -31,6 +33,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = BASE_DIR / "frontend"
 
 camera_adapter = Insta360CameraAdapter()
+capture_processor = CaptureProcessor()
 
 PERSISTENCE_MODE = os.getenv("APP_PERSISTENCE", "memory").strip().lower()
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./god_help_business.db")
@@ -106,6 +109,7 @@ class PinCreateRequest(BaseModel):
     heading: float
     position_x: float | None = Field(default=None, ge=0, le=1)
     position_y: float | None = Field(default=None, ge=0, le=1)
+    telemetry: dict[str, Any] | None = None
     captured_on: str
     photo_key: str | None = None
     media_type: str | None = None
@@ -121,6 +125,9 @@ class PinResponse(BaseModel):
     heading: float
     position_x: float | None = None
     position_y: float | None = None
+    telemetry: dict[str, Any] | None = None
+    processing_status: str = "not_requested"
+    processing_error: str | None = None
     captured_on: str
     photo_key: str | None = None
     media_type: str | None = None
@@ -336,6 +343,7 @@ def _store_floor_plan(project_id: str, upload: UploadFile) -> str:
 
 
 def _pin_response_from_record(record: PinRecord) -> PinResponse:
+    telemetry = json.loads(record.telemetry_json) if record.telemetry_json else None
     return PinResponse(
         id=record.id,
         project_id=record.project_id,
@@ -344,6 +352,9 @@ def _pin_response_from_record(record: PinRecord) -> PinResponse:
         heading=record.heading,
         position_x=record.position_x,
         position_y=record.position_y,
+        telemetry=telemetry,
+        processing_status=record.processing_status,
+        processing_error=record.processing_error,
         captured_on=record.captured_on,
         photo_key=record.photo_key,
         media_type=record.media_type,
@@ -603,6 +614,17 @@ def camera_adapter_status() -> dict[str, object]:
     return camera_adapter.status().as_dict()
 
 
+@app.get("/capture-processing/status", tags=["capture-processing"])
+def capture_processing_status() -> dict[str, object]:
+    status = capture_processor.status()
+    return {
+        "processor": status.processor,
+        "status": status.status,
+        "capabilities": list(status.capabilities),
+        "message": status.message,
+    }
+
+
 @app.post("/projects", response_model=ProjectResponse, status_code=201, tags=["projects"])
 def create_project(payload: ProjectCreateRequest, request: Request) -> ProjectResponse:
     user_id = _get_user_id(request)
@@ -772,6 +794,8 @@ def create_pin(project_id: str, payload: PinCreateRequest, request: Request) -> 
                 heading=payload.heading,
                 position_x=payload.position_x,
                 position_y=payload.position_y,
+                telemetry_json=json.dumps(payload.telemetry) if payload.telemetry else None,
+                processing_status="metadata_received" if payload.telemetry else "not_requested",
                 captured_on=payload.captured_on,
                 photo_key=payload.photo_key,
                 media_type=payload.media_type or "photo",
@@ -794,6 +818,9 @@ def create_pin(project_id: str, payload: PinCreateRequest, request: Request) -> 
         "heading": payload.heading,
         "position_x": payload.position_x,
         "position_y": payload.position_y,
+        "telemetry": payload.telemetry,
+        "processing_status": "metadata_received" if payload.telemetry else "not_requested",
+        "processing_error": None,
         "captured_on": payload.captured_on,
         "photo_key": payload.photo_key,
         "media_type": payload.media_type or "photo",
@@ -918,6 +945,31 @@ def upload_pin_native_file(project_id: str, pin_id: str, request: Request, file:
     pin["native_file_key"] = native_key
     pin["media_type"] = pin.get("media_type") or "insta360"
     return NativeUploadResponse(id=pin_id, native_file_key=native_key, photo_key=pin.get("photo_key"))
+
+
+@app.post("/projects/{project_id}/pins/{pin_id}/process", tags=["capture-processing"])
+def process_pin_capture(project_id: str, pin_id: str, request: Request) -> dict[str, object]:
+    _ensure_project_ownership(project_id, _get_user_id(request))
+
+    if PERSISTENCE_MODE == "database":
+        with SessionLocal() as db:
+            pin = db.get(PinRecord, pin_id)
+            if not pin or pin.project_id != project_id:
+                raise HTTPException(status_code=404, detail="Pin not found")
+            telemetry = json.loads(pin.telemetry_json) if pin.telemetry_json else None
+            result = capture_processor.process(telemetry)
+            pin.processing_status = str(result["status"])
+            pin.processing_error = None if result["status"] == "ready" else str(result["message"])
+            db.commit()
+            return result
+
+    pin = pins_by_id.get(pin_id)
+    if not pin or pin["project_id"] != project_id:
+        raise HTTPException(status_code=404, detail="Pin not found")
+    result = capture_processor.process(pin.get("telemetry"))
+    pin["processing_status"] = str(result["status"])
+    pin["processing_error"] = None if result["status"] == "ready" else str(result["message"])
+    return result
 
 
 @app.post("/projects/{project_id}/floor-plan-upload", response_model=FloorPlanUploadResponse, tags=["projects"])

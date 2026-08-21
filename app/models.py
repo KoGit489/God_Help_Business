@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import Float, ForeignKey, String
+from sqlalchemy import Float, ForeignKey, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -31,6 +31,9 @@ class PinRecord(Base):
     heading: Mapped[float] = mapped_column(Float, nullable=False)
     position_x: Mapped[float | None] = mapped_column(Float, nullable=True)
     position_y: Mapped[float | None] = mapped_column(Float, nullable=True)
+    telemetry_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    processing_status: Mapped[str] = mapped_column(String(64), nullable=False, default="not_requested")
+    processing_error: Mapped[str | None] = mapped_column(String(500), nullable=True)
     captured_on: Mapped[str] = mapped_column(String(64), nullable=False)
     photo_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
     media_type: Mapped[str | None] = mapped_column(String(64), nullable=True, default="photo")
