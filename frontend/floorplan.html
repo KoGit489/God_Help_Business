@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CASAI Floor Plan Walkthrough</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.css" />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <style>
+      :root { color-scheme: light; }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: #eef3f1; color: #17211f; font-family: Georgia, 'Times New Roman', serif; }
+      .shell { max-width: 1240px; margin: 0 auto; padding: 1.2rem; }
+      .topbar { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: 1rem; }
+      .eyebrow { color: #b64b2d; font: 700 0.75rem Arial, sans-serif; letter-spacing: 0.12em; text-transform: uppercase; }
+      h1, h2, p { margin-top: 0; }
+      h1 { margin-bottom: 0.25rem; font-size: clamp(1.8rem, 4vw, 3rem); }
+      h2 { font-size: 1.2rem; }
+      .layout { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(290px, 0.75fr); gap: 1rem; align-items: start; }
+      .panel { background: #fffdf8; border: 1px solid #c9d5ce; border-radius: 8px; padding: 1rem; box-shadow: 0 8px 24px rgba(25, 45, 38, 0.07); }
+      .stack { display: grid; gap: 0.7rem; }
+      .controls { display: grid; gap: 0.7rem; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .full { grid-column: 1 / -1; }
+      label { display: grid; gap: 0.3rem; color: #4c5d57; font: 700 0.78rem Arial, sans-serif; }
+      input, select, button { width: 100%; min-height: 42px; border: 1px solid #b9c8c0; border-radius: 5px; padding: 0.65rem 0.7rem; font: 1rem Georgia, 'Times New Roman', serif; }
+      input[type="range"] { padding: 0; accent-color: #b64b2d; }
+      button { background: #b64b2d; color: #fff; border-color: #b64b2d; cursor: pointer; font-weight: 700; }
+      button.secondary { background: #2b6f68; border-color: #2b6f68; }
+      button.quiet { background: #edf2ee; color: #214f49; border-color: #c9d5ce; }
+      button:disabled { cursor: not-allowed; opacity: 0.55; }
+      .plan-wrap { position: relative; min-height: 520px; display: grid; place-items: center; overflow: auto; background: #dce5df; border: 1px solid #b9c8c0; border-radius: 6px; padding: 0.75rem; }
+      .plan-stage { position: relative; display: inline-block; max-width: 100%; line-height: 0; }
+      .plan-stage img { display: block; max-width: min(100%, 1000px); max-height: 70vh; width: auto; height: auto; background: white; }
+      .plan-empty { min-height: 400px; display: grid; place-items: center; text-align: center; color: #52645d; font: 1rem Arial, sans-serif; padding: 2rem; }
+      .waypoint { position: absolute; width: 28px; height: 28px; transform: translate(-50%, -50%); border: 3px solid white; border-radius: 50%; background: #b64b2d; box-shadow: 0 3px 10px rgba(35, 45, 40, 0.35); cursor: pointer; }
+      .waypoint.current { width: 34px; height: 34px; background: #2b6f68; animation: pulse 1.5s infinite; }
+      .waypoint::after { content: attr(data-label); position: absolute; left: 18px; top: 24px; white-space: nowrap; color: #17211f; background: #fffdf8; border: 1px solid #c9d5ce; border-radius: 4px; padding: 0.2rem 0.35rem; font: 700 0.72rem Arial, sans-serif; }
+      @keyframes pulse { 50% { box-shadow: 0 0 0 8px rgba(43, 111, 104, 0.14); } }
+      .readout { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.45rem; }
+      .readout div { background: #edf2ee; border-radius: 5px; padding: 0.55rem; text-align: center; font: 700 0.78rem Arial, sans-serif; color: #2b6f68; }
+      .status { min-height: 1.4rem; color: #52645d; font: 0.86rem Arial, sans-serif; }
+      .waypoint-list { max-height: 230px; overflow: auto; padding: 0; margin: 0; list-style: none; }
+      .waypoint-list li { border-top: 1px solid #dbe4de; padding: 0.6rem 0; }
+      .waypoint-list button { min-height: 0; padding: 0.35rem; background: transparent; border: 0; color: #2b6f68; text-align: left; }
+      .small { color: #52645d; font: 0.8rem Arial, sans-serif; }
+      .modal { position: fixed; inset: 0; display: none; place-items: center; padding: 1rem; background: rgba(12, 25, 21, 0.78); z-index: 5; }
+      .modal.open { display: grid; }
+      .viewer { width: min(100%, 920px); background: #101716; border-radius: 8px; padding: 0.75rem; }
+      .viewer-head { display: flex; justify-content: space-between; align-items: center; gap: 1rem; color: white; padding-bottom: 0.6rem; font: 700 0.9rem Arial, sans-serif; }
+      #panorama { width: 100%; height: min(65vh, 560px); }
+      #plain-preview { display: none; max-width: 100%; max-height: 65vh; margin: auto; }
+      @media (max-width: 800px) { .layout { grid-template-columns: 1fr; } .plan-wrap { min-height: 360px; } .plan-stage img { max-height: 56vh; } }
+      @media (max-width: 480px) { .shell { padding: 0.7rem; } .controls { grid-template-columns: 1fr; } .full { grid-column: auto; } .topbar { align-items: flex-start; flex-direction: column; } }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div><div class="eyebrow">CASAI / Draft 1</div><h1>Floor plan walkthrough</h1><p class="small">Calibrate a drawing, walk a route, and leave clickable capture points for remote review.</p></div>
+        <a href="index.html"><button class="quiet" type="button">Back to dashboard</button></a>
+      </header>
+      <div class="layout">
+        <section class="panel stack">
+          <div class="controls">
+            <label>Project<select id="project-select"></select></label>
+            <label>Drawing scale<select id="scale-select"><option value="0.125">1/8 in = 1 ft</option><option value="0.25">1/4 in = 1 ft</option><option value="0.0625">1/16 in = 1 ft</option><option value="1">1 in = 1 ft</option></select></label>
+            <label>Plan width (feet)<input id="plan-width" type="number" min="1" step="1" value="120" /></label>
+            <label>Position updates<select id="update-mode"><option value="step">On each walk step</option><option value="interval">Every 5 seconds</option></select></label>
+            <label class="full">Upload floor plan (PDF, JPG, or PNG)<input id="floor-plan-file" type="file" accept="application/pdf,image/png,image/jpeg" /></label>
+          </div>
+          <div id="plan-status" class="status">Choose a project and upload a floor plan to begin.</div>
+          <div id="plan-wrap" class="plan-wrap"><div class="plan-empty">Your floor plan will appear here.<br />For clickable waypoints, upload a JPG or PNG export of the plan.</div></div>
+          <div class="readout"><div>Route<br /><span id="route-distance">0.0 ft</span></div><div>Waypoints<br /><span id="waypoint-count">0</span></div><div>Heading<br /><span id="heading-value">0°</span></div></div>
+        </section>
+        <aside class="stack">
+          <section class="panel stack">
+            <h2>1. Start the route</h2>
+            <p class="small">Click the drawing to set the starting point. Then use the walk controls to move across the plan.</p>
+            <button id="set-gps" class="secondary" type="button">Use current GPS location</button>
+            <button id="enable-sensors" class="quiet" type="button">Enable device heading</button>
+            <label>Heading <input id="heading" type="range" min="0" max="359" value="0" /></label>
+            <label>Walk distance (feet)<input id="step-distance" type="number" min="0.1" step="0.1" value="1" /></label>
+            <button id="walk-step" type="button" disabled>Walk one step</button>
+            <div id="telemetry-status" class="small">GPS and device sensors are optional. The demo route uses calibrated dead reckoning when they are unavailable.</div>
+          </section>
+          <section class="panel stack">
+            <h2>2. Save a capture</h2>
+            <p class="small">Save a placeholder at the current position, then attach the preview image and original `.insp` file.</p>
+            <label>Preview image<input id="photo-file" type="file" accept="image/*" /></label>
+            <label>Original ONE X2 file<input id="native-file" type="file" accept=".insp,.zip,application/octet-stream,image/*" /></label>
+            <button id="save-waypoint" class="secondary" type="button" disabled>Save waypoint here</button>
+          </section>
+          <section class="panel">
+            <h2>Saved waypoints</h2>
+            <ul id="waypoint-list" class="waypoint-list"><li class="small">No waypoints yet.</li></ul>
+          </section>
+        </aside>
+      </div>
+    </main>
+    <div id="viewer-modal" class="modal" role="dialog" aria-modal="true" aria-label="360 capture viewer">
+      <div class="viewer"><div class="viewer-head"><span id="viewer-title">Capture</span><button id="close-viewer" class="quiet" type="button">Close</button></div><div id="panorama"></div><img id="plain-preview" alt="Capture preview" /></div>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.js"></script>
+    <script src="floorplan.js"></script>
+  </body>
+</html>

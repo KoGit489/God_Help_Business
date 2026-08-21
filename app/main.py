@@ -104,6 +104,8 @@ class PinCreateRequest(BaseModel):
     latitude: float
     longitude: float
     heading: float
+    position_x: float | None = Field(default=None, ge=0, le=1)
+    position_y: float | None = Field(default=None, ge=0, le=1)
     captured_on: str
     photo_key: str | None = None
     media_type: str | None = None
@@ -117,6 +119,8 @@ class PinResponse(BaseModel):
     latitude: float
     longitude: float
     heading: float
+    position_x: float | None = None
+    position_y: float | None = None
     captured_on: str
     photo_key: str | None = None
     media_type: str | None = None
@@ -142,6 +146,13 @@ class NativeUploadResponse(BaseModel):
     id: str
     native_file_key: str
     photo_key: str | None = None
+
+
+class FloorPlanUploadResponse(BaseModel):
+    filename: str
+    media_key: str
+    media_url: str
+    content_type: str | None = None
 
 
 class CameraStatusResponse(BaseModel):
@@ -313,6 +324,17 @@ def _store_native_file(project_id: str, pin_id: str, upload: UploadFile) -> str:
     return native_key
 
 
+def _store_floor_plan(project_id: str, upload: UploadFile) -> str:
+    filename = Path(upload.filename or "floor-plan.bin").name
+    destination = UPLOAD_DIR / "floorplans" / project_id
+    destination.mkdir(parents=True, exist_ok=True)
+    output_file = destination / filename
+    upload.file.seek(0)
+    with output_file.open("wb") as handle:
+        shutil.copyfileobj(upload.file, handle)
+    return f"floorplans/{project_id}/{filename}"
+
+
 def _pin_response_from_record(record: PinRecord) -> PinResponse:
     return PinResponse(
         id=record.id,
@@ -320,6 +342,8 @@ def _pin_response_from_record(record: PinRecord) -> PinResponse:
         latitude=record.latitude,
         longitude=record.longitude,
         heading=record.heading,
+        position_x=record.position_x,
+        position_y=record.position_y,
         captured_on=record.captured_on,
         photo_key=record.photo_key,
         media_type=record.media_type,
@@ -746,6 +770,8 @@ def create_pin(project_id: str, payload: PinCreateRequest, request: Request) -> 
                 latitude=payload.latitude,
                 longitude=payload.longitude,
                 heading=payload.heading,
+                position_x=payload.position_x,
+                position_y=payload.position_y,
                 captured_on=payload.captured_on,
                 photo_key=payload.photo_key,
                 media_type=payload.media_type or "photo",
@@ -766,6 +792,8 @@ def create_pin(project_id: str, payload: PinCreateRequest, request: Request) -> 
         "latitude": payload.latitude,
         "longitude": payload.longitude,
         "heading": payload.heading,
+        "position_x": payload.position_x,
+        "position_y": payload.position_y,
         "captured_on": payload.captured_on,
         "photo_key": payload.photo_key,
         "media_type": payload.media_type or "photo",
@@ -890,6 +918,38 @@ def upload_pin_native_file(project_id: str, pin_id: str, request: Request, file:
     pin["native_file_key"] = native_key
     pin["media_type"] = pin.get("media_type") or "insta360"
     return NativeUploadResponse(id=pin_id, native_file_key=native_key, photo_key=pin.get("photo_key"))
+
+
+@app.post("/projects/{project_id}/floor-plan-upload", response_model=FloorPlanUploadResponse, tags=["projects"])
+def upload_floor_plan(project_id: str, request: Request, file: UploadFile = File(...)) -> FloorPlanUploadResponse:
+    if file.filename is None:
+        raise HTTPException(status_code=400, detail="A filename is required")
+
+    _ensure_project_ownership(project_id, _get_user_id(request))
+    if PERSISTENCE_MODE == "database":
+        with SessionLocal() as db:
+            if not db.get(ProjectRecord, project_id):
+                raise HTTPException(status_code=404, detail="Project not found")
+    elif project_id not in projects:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    media_key = _store_floor_plan(project_id, file)
+    return FloorPlanUploadResponse(
+        filename=Path(file.filename).name,
+        media_key=media_key,
+        media_url=f"/media/{media_key}",
+        content_type=file.content_type,
+    )
+
+
+@app.get("/media/{media_path:path}", tags=["media"])
+def serve_media(media_path: str) -> FileResponse:
+    relative_path = media_path.removeprefix("uploads/")
+    requested_path = (UPLOAD_DIR / relative_path).resolve()
+    upload_root = UPLOAD_DIR.resolve()
+    if upload_root not in requested_path.parents or not requested_path.is_file():
+        raise HTTPException(status_code=404, detail="Media file not found")
+    return FileResponse(requested_path)
 
 
 @app.get("/index.html")

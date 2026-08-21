@@ -195,7 +195,7 @@ def test_browser_frontend_and_cors_are_available() -> None:
 
     index_response = client.get("/index.html")
     assert index_response.status_code == 200
-    assert "God_Help_Business MVP" in index_response.text
+    assert "CASAI MVP" in index_response.text
 
     preflight = client.options(
         "/projects",
@@ -206,3 +206,38 @@ def test_browser_frontend_and_cors_are_available() -> None:
     )
     assert preflight.status_code == 200
     assert preflight.headers.get("access-control-allow-origin") in {"*", "http://192.168.1.10:8000"}
+
+
+def test_floor_plan_upload_and_pin_position_are_available() -> None:
+    reset_demo_store()
+
+    project = client.post("/projects", json={"title": "Plan Demo"}).json()
+    upload = client.post(
+        f"/projects/{project['id']}/floor-plan-upload",
+        files={"file": ("plan.png", b"fake-plan", "image/png")},
+    )
+    assert upload.status_code == 200
+    assert upload.json()["media_url"].endswith(f"/media/floorplans/{project['id']}/plan.png")
+    media_response = client.get(upload.json()["media_url"])
+    assert media_response.status_code == 200
+    assert media_response.content == b"fake-plan"
+
+    floorplan_page = client.get("/floorplan.html")
+    assert floorplan_page.status_code == 200
+    assert "Floor plan walkthrough" in floorplan_page.text
+
+    pin = client.post(
+        f"/projects/{project['id']}/pins",
+        json={
+            "latitude": 5.56,
+            "longitude": -0.24,
+            "heading": 90,
+            "position_x": 0.25,
+            "position_y": 0.75,
+            "captured_on": "2026-08-20",
+            "media_type": "insta360",
+        },
+    )
+    assert pin.status_code == 201
+    assert pin.json()["position_x"] == 0.25
+    assert pin.json()["position_y"] == 0.75

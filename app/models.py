@@ -29,6 +29,8 @@ class PinRecord(Base):
     latitude: Mapped[float] = mapped_column(Float, nullable=False)
     longitude: Mapped[float] = mapped_column(Float, nullable=False)
     heading: Mapped[float] = mapped_column(Float, nullable=False)
+    position_x: Mapped[float | None] = mapped_column(Float, nullable=True)
+    position_y: Mapped[float | None] = mapped_column(Float, nullable=True)
     captured_on: Mapped[str] = mapped_column(String(64), nullable=False)
     photo_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
     media_type: Mapped[str | None] = mapped_column(String(64), nullable=True, default="photo")
