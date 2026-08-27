@@ -33,6 +33,13 @@ That is the minimum valuable product.
 - AI analysis
 - Complex permissions beyond project-level access
 
+### Planned after v1
+
+- Floor-plan-guided 360 walkthroughs so office users can inspect a job site remotely
+- Two-dimensional markups and notes tied to a floor-plan position or capture waypoint
+- Three-dimensional spatial notes anchored to observed objects in a 360 scene
+- Automated waypoint placement using capture telemetry, visual-inertial odometry, and SLAM
+
 ## 3. Recommended architecture
 
 ### Frontend
@@ -117,6 +124,21 @@ The current Python starter in [app/main.py](app/main.py) should become the backe
 - content_type
 - uploaded_at
 
+### Annotations (Phase 2 and later)
+
+- id
+- project_id
+- pin_id
+- author_id
+- body
+- status
+- floor_plan_x
+- floor_plan_y
+- panorama_yaw
+- panorama_pitch
+- spatial_anchor
+- created_at
+
 ### ShareLinks
 
 - id
@@ -163,6 +185,19 @@ The current Python starter in [app/main.py](app/main.py) should become the backe
 
 - Generate a share link for one project
 - Restrict shared access to that project only
+
+### Screen 7: Remote walkthrough (Phase 2)
+
+- Show the floor plan with capture waypoints
+- Let office users choose a waypoint and open its 360 view
+- Show camera direction so the view matches the field capture
+- Let reviewers move between connected captures without being on site
+
+### Screen 8: Markups and annotations (Phase 2 and later)
+
+- Add a note or markup to a floor-plan position or waypoint
+- Assign an issue, status, or owner to a note
+- In later releases, anchor a note to yaw/pitch or a recognized 3D object in the 360 view
 
 ## 7. Backend API blueprint
 
@@ -227,6 +262,24 @@ The current Python starter in [app/main.py](app/main.py) should become the backe
 - Deploy frontend and backend
 - Connect storage and database in production
 
+### Phase 5 — Remote walkthrough and collaboration
+
+- Add a floor-plan-guided 360 walkthrough for office reviewers
+- Link each capture to a floor-plan waypoint and viewing direction
+- Add two-dimensional plan markups, notes, assignments, and issue status
+- Add project members and role-based collaboration
+- Add audit history for review decisions and annotations
+
+### Phase 6 — Spatial intelligence
+
+- Read telemetry from supported camera files such as Insta360 `.insp`
+- Generate equirectangular preview images for browser viewing
+- Fuse timestamps, GPS, gyroscope, accelerometer, and camera orientation data
+- Use visual-inertial odometry and SLAM to estimate capture positions and route confidence
+- Align the estimated route to a calibrated floor plan
+- Add three-dimensional spatial annotation anchors within 360 scenes
+- Validate accuracy on measured routes at real job sites
+
 ### Phase 4 implementation notes
 
 - Backend now returns consistent error envelopes with request IDs for traceability.
@@ -258,6 +311,8 @@ The MVP is successful when a user can:
 - attach a photo,
 - review the captured pin data,
 - and share that project through a limited link.
+
+The following phases are successful when an office reviewer can open a floor plan, travel through linked 360 captures as if they were on the job site, and leave notes that remain tied to the relevant plan position or spatial view.
 
 ## 11. Recommended first-week priorities
 
