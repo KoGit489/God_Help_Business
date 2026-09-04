@@ -4,61 +4,53 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>CASAI Floor Plan Walkthrough</title>
+    <link rel="icon" href="assets/logo.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.css" />
+    <link rel="stylesheet" href="styles.css" />
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <style>
-      :root { color-scheme: light; }
-      * { box-sizing: border-box; }
-      body { margin: 0; background: #eef3f1; color: #17211f; font-family: Georgia, 'Times New Roman', serif; }
       .shell { max-width: 1240px; margin: 0 auto; padding: 1.2rem; }
-      .topbar { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: 1rem; }
-      .eyebrow { color: #b64b2d; font: 700 0.75rem Arial, sans-serif; letter-spacing: 0.12em; text-transform: uppercase; }
-      h1, h2, p { margin-top: 0; }
-      h1 { margin-bottom: 0.25rem; font-size: clamp(1.8rem, 4vw, 3rem); }
-      h2 { font-size: 1.2rem; }
       .layout { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(290px, 0.75fr); gap: 1rem; align-items: start; }
-      .panel { background: #fffdf8; border: 1px solid #c9d5ce; border-radius: 8px; padding: 1rem; box-shadow: 0 8px 24px rgba(25, 45, 38, 0.07); }
-      .stack { display: grid; gap: 0.7rem; }
       .controls { display: grid; gap: 0.7rem; grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .full { grid-column: 1 / -1; }
-      label { display: grid; gap: 0.3rem; color: #4c5d57; font: 700 0.78rem Arial, sans-serif; }
-      input, select, button { width: 100%; min-height: 42px; border: 1px solid #b9c8c0; border-radius: 5px; padding: 0.65rem 0.7rem; font: 1rem Georgia, 'Times New Roman', serif; }
-      input[type="range"] { padding: 0; accent-color: #b64b2d; }
-      button { background: #b64b2d; color: #fff; border-color: #b64b2d; cursor: pointer; font-weight: 700; }
-      button.secondary { background: #2b6f68; border-color: #2b6f68; }
-      button.quiet { background: #edf2ee; color: #214f49; border-color: #c9d5ce; }
-      button:disabled { cursor: not-allowed; opacity: 0.55; }
-      .plan-wrap { position: relative; min-height: 520px; display: grid; place-items: center; overflow: auto; background: #dce5df; border: 1px solid #b9c8c0; border-radius: 6px; padding: 0.75rem; }
+      .plan-wrap { position: relative; min-height: 520px; display: grid; place-items: center; overflow: auto; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 0.75rem; }
       .plan-stage { position: relative; display: inline-block; max-width: 100%; line-height: 0; }
       .plan-stage img { display: block; max-width: min(100%, 1000px); max-height: 70vh; width: auto; height: auto; background: white; }
-      .plan-empty { min-height: 400px; display: grid; place-items: center; text-align: center; color: #52645d; font: 1rem Arial, sans-serif; padding: 2rem; }
-      .waypoint { position: absolute; width: 28px; height: 28px; transform: translate(-50%, -50%); border: 3px solid white; border-radius: 50%; background: #b64b2d; box-shadow: 0 3px 10px rgba(35, 45, 40, 0.35); cursor: pointer; }
-      .waypoint.current { width: 34px; height: 34px; background: #2b6f68; animation: pulse 1.5s infinite; }
-      .waypoint::after { content: attr(data-label); position: absolute; left: 18px; top: 24px; white-space: nowrap; color: #17211f; background: #fffdf8; border: 1px solid #c9d5ce; border-radius: 4px; padding: 0.2rem 0.35rem; font: 700 0.72rem Arial, sans-serif; }
-      @keyframes pulse { 50% { box-shadow: 0 0 0 8px rgba(43, 111, 104, 0.14); } }
+      .plan-empty { min-height: 400px; display: grid; place-items: center; text-align: center; color: var(--muted); font-size: 1rem; padding: 2rem; }
+      .waypoint { position: absolute; width: 28px; height: 28px; transform: translate(-50%, -50%); border: 3px solid white; border-radius: 50%; background: var(--gold-dark); box-shadow: 0 3px 10px rgba(20, 23, 26, 0.35); cursor: pointer; }
+      .waypoint.current { width: 34px; height: 34px; background: var(--ink); animation: pulse 1.5s infinite; }
+      .waypoint::after { content: attr(data-label); position: absolute; left: 18px; top: 24px; white-space: nowrap; color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 0.2rem 0.35rem; font-size: 0.72rem; font-weight: 700; }
+      @keyframes pulse { 50% { box-shadow: 0 0 0 8px rgba(20, 23, 26, 0.14); } }
       .readout { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.45rem; }
-      .readout div { background: #edf2ee; border-radius: 5px; padding: 0.55rem; text-align: center; font: 700 0.78rem Arial, sans-serif; color: #2b6f68; }
-      .status { min-height: 1.4rem; color: #52645d; font: 0.86rem Arial, sans-serif; }
+      .readout div { background: var(--bg); border-radius: var(--radius-sm); padding: 0.55rem; text-align: center; font-size: 0.78rem; font-weight: 700; color: var(--gold-dark); }
+      .status { min-height: 1.4rem; color: var(--muted); font-size: 0.86rem; }
       .waypoint-list { max-height: 230px; overflow: auto; padding: 0; margin: 0; list-style: none; }
-      .waypoint-list li { border-top: 1px solid #dbe4de; padding: 0.6rem 0; }
-      .waypoint-list button { min-height: 0; padding: 0.35rem; background: transparent; border: 0; color: #2b6f68; text-align: left; }
-      .small { color: #52645d; font: 0.8rem Arial, sans-serif; }
-      .modal { position: fixed; inset: 0; display: none; place-items: center; padding: 1rem; background: rgba(12, 25, 21, 0.78); z-index: 5; }
+      .waypoint-list li { border-top: 1px solid var(--border); padding: 0.6rem 0; }
+      .waypoint-list button { min-height: 0; padding: 0.35rem; background: transparent; border: 0; color: var(--gold-dark); text-align: left; font-weight: 700; }
+      .small { color: var(--muted); font-size: 0.8rem; }
+      .modal { position: fixed; inset: 0; display: none; place-items: center; padding: 1rem; background: rgba(20, 23, 26, 0.78); z-index: 5; }
       .modal.open { display: grid; }
-      .viewer { width: min(100%, 920px); background: #101716; border-radius: 8px; padding: 0.75rem; }
-      .viewer-head { display: flex; justify-content: space-between; align-items: center; gap: 1rem; color: white; padding-bottom: 0.6rem; font: 700 0.9rem Arial, sans-serif; }
+      .viewer { width: min(100%, 920px); background: var(--ink); border-radius: var(--radius-md); padding: 0.75rem; }
+      .viewer-head { display: flex; justify-content: space-between; align-items: center; gap: 1rem; color: white; padding-bottom: 0.6rem; font-size: 0.9rem; font-weight: 700; }
       #panorama { width: 100%; height: min(65vh, 560px); }
       #plain-preview { display: none; max-width: 100%; max-height: 65vh; margin: auto; }
       @media (max-width: 800px) { .layout { grid-template-columns: 1fr; } .plan-wrap { min-height: 360px; } .plan-stage img { max-height: 56vh; } }
-      @media (max-width: 480px) { .shell { padding: 0.7rem; } .controls { grid-template-columns: 1fr; } .full { grid-column: auto; } .topbar { align-items: flex-start; flex-direction: column; } }
+      @media (max-width: 480px) { .shell { padding: 0.7rem; } .controls { grid-template-columns: 1fr; } .full { grid-column: auto; } }
     </style>
   </head>
   <body>
     <main class="shell">
-      <header class="topbar">
-        <div><div class="eyebrow">CASAI / Draft 1</div><h1>Floor plan walkthrough</h1><p class="small">Calibrate a drawing, walk a route, and leave clickable capture points for remote review.</p></div>
+      <header class="site-header">
+        <div class="brand">
+          <img class="brand-logo" src="assets/logo.svg" alt="CASAI logo" />
+          <div class="brand-text">
+            <span class="eyebrow">CASAI / Draft 1</span>
+            <h1>Floor plan walkthrough</h1>
+          </div>
+        </div>
         <a href="index.html"><button class="quiet" type="button">Back to dashboard</button></a>
       </header>
+      <p class="small" style="margin: -0.75rem 0 1rem;">Calibrate a drawing, walk a route, and leave clickable capture points for remote review.</p>
       <div class="layout">
         <section class="panel stack">
           <div class="controls">

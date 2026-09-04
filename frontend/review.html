@@ -3,42 +3,32 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Project Review</title>
+    <title>CASAI Project Review</title>
+    <link rel="icon" href="assets/logo.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="styles.css" />
     <style>
-      * { box-sizing: border-box; }
-      body { font-family: Arial, sans-serif; margin: 0; background: linear-gradient(180deg, #eff6ff 0%, #f8fafc 100%); color: #0f172a; }
-      .card { max-width: 560px; margin: 0 auto; padding: 1rem; background: rgba(255,255,255,0.97); border-radius: 20px; box-shadow: 0 12px 32px rgba(15,23,42,0.08); }
+      .app-shell { max-width: 620px; }
       .grid { display: grid; gap: 1rem; }
-      .panel { border: 1px solid #e2e8f0; border-radius: 12px; padding: 0.9rem; background: #fcfdff; }
-      button { width: 100%; padding: 0.8rem; border-radius: 10px; border: 1px solid #cbd5e1; background: #2563eb; color: white; cursor: pointer; font-weight: 600; }
-      code { background: #f1f5f9; padding: 0.2rem 0.4rem; border-radius: 4px; }
-      ul { padding-left: 0; list-style: none; margin: 0; }
-      li { margin-bottom: 0.6rem; }
-      .muted { color: #64748b; font-size: 0.95rem; }
-      .share-box { margin-top: 0.75rem; padding: 0.75rem; border-radius: 10px; background: #eff6ff; border: 1px solid #bfdbfe; }
-      .status-pill { display: inline-block; padding: 0.35rem 0.6rem; border-radius: 999px; background: #fef3c7; color: #92400e; font-size: 0.9rem; margin-bottom: 0.5rem; }
       .project-list { display: grid; gap: 0.6rem; }
-      .project-pill { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; padding: 0.7rem 0.8rem; border: 1px solid #dbeafe; border-radius: 10px; background: white; }
-      .checklist { list-style: none; padding: 0; margin: 0.7rem 0 0; display: grid; gap: 0.5rem; }
-      .checklist li { display: flex; align-items: center; gap: 0.5rem; padding: 0.45rem 0.55rem; border-radius: 8px; background: #f8fafc; border: 1px solid #e2e8f0; }
-      .checklist .done { color: #166534; }
-      .checklist .pending { color: #475569; }
+      .project-pill { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; padding: 0.7rem 0.8rem; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); }
+      .share-box { margin-top: 0.75rem; padding: 0.75rem; border-radius: var(--radius-md); background: var(--gold-tint); border: 1px solid var(--gold); }
+      .status-pill { display: inline-block; padding: 0.35rem 0.6rem; border-radius: 999px; background: var(--gold-tint); color: var(--gold-dark); font-size: 0.9rem; margin-bottom: 0.5rem; font-weight: 700; }
       .pin-card {
         display: grid;
         grid-template-columns: 86px 1fr;
         gap: 0.7rem;
         padding: 0.7rem;
-        border: 1px solid #e2e8f0;
-        border-radius: 12px;
-        background: #f8fafc;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        background: var(--bg);
       }
       .mini-map {
         position: relative;
         width: 72px;
         height: 72px;
-        border-radius: 12px;
-        background: linear-gradient(135deg, #dbeafe, #f8fafc);
-        border: 1px solid #cbd5e1;
+        border-radius: var(--radius-md);
+        background: linear-gradient(135deg, var(--gold-tint), var(--bg));
+        border: 1px solid var(--border);
         overflow: hidden;
       }
       .mini-map::before {
@@ -46,7 +36,7 @@
         position: absolute;
         width: 52px;
         height: 2px;
-        background: #ef4444;
+        background: var(--gold-dark);
         left: 10px;
         top: 34px;
         transform-origin: center;
@@ -57,32 +47,40 @@
         position: absolute;
         width: 10px;
         height: 10px;
-        background: #2563eb;
+        background: var(--ink);
         border-radius: 50%;
         left: 31px;
         top: 30px;
       }
-      input, textarea { width: 100%; padding: 0.7rem; border-radius: 10px; border: 1px solid #cbd5e1; font-size: 1rem; }
       .stack { display: grid; gap: 0.5rem; }
-      @media (max-width: 420px) {
-        body { margin: 0.75rem; }
-        .card { padding: 0.8rem; border-radius: 16px; }
-      }
+      code { background: var(--bg); padding: 0.2rem 0.4rem; border-radius: 4px; }
+      ul { padding-left: 0; list-style: none; margin: 0; }
+      li { margin-bottom: 0.6rem; }
     </style>
   </head>
   <body>
-    <div class="card">
-      <h1>Project Review</h1>
+    <div class="app-shell">
+      <header class="site-header">
+        <div class="brand">
+          <img class="brand-logo" src="assets/logo.svg" alt="CASAI logo" />
+          <div class="brand-text">
+            <span class="eyebrow">CASAI / Draft 1</span>
+            <h1>Project review</h1>
+          </div>
+        </div>
+        <a href="index.html"><button class="quiet" type="button">Back to dashboard</button></a>
+      </header>
+      <div class="card">
       <p>This page gives the project a clearer review view so captured pins can be reviewed, shared, and presented more clearly.</p>
       <div class="grid">
         <div class="panel">
           <h2>Create or open a project</h2>
           <input id="review-title" placeholder="Project title" />
           <input id="review-description" placeholder="Description" style="margin-top:0.6rem;" />
-          <button id="create-review-project" style="margin-top:0.8rem;">Create project</button>
-          <button id="create-share-link" style="margin-top:0.8rem; background:#0f766e;">Create share link</button>
-          <button id="copy-share-link" style="margin-top:0.8rem; background:#0f766e; display:none;">Copy share link</button>
-          <button id="mark-ready" style="margin-top:0.8rem; background:#7c3aed;">Mark ready for review</button>
+          <button id="create-review-project" class="primary" style="margin-top:0.8rem;">Create project</button>
+          <button id="create-share-link" class="secondary" style="margin-top:0.8rem;">Create share link</button>
+          <button id="copy-share-link" class="secondary" style="margin-top:0.8rem; display:none;">Copy share link</button>
+          <button id="mark-ready" class="quiet" style="margin-top:0.8rem;">Mark ready for review</button>
           <div class="panel" style="margin-top:1rem; padding: 0.8rem;">
             <div class="muted">Existing projects</div>
             <div id="project-list" class="project-list" style="margin-top:0.6rem;"></div>
