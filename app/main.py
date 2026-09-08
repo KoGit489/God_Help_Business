@@ -126,6 +126,7 @@ class PinResponse(BaseModel):
     position_x: float | None = None
     position_y: float | None = None
     telemetry: dict[str, Any] | None = None
+    waypoints: list[dict[str, Any]] | None = None
     processing_status: str = "not_requested"
     processing_error: str | None = None
     captured_on: str
@@ -344,6 +345,7 @@ def _store_floor_plan(project_id: str, upload: UploadFile) -> str:
 
 def _pin_response_from_record(record: PinRecord) -> PinResponse:
     telemetry = json.loads(record.telemetry_json) if record.telemetry_json else None
+    waypoints = json.loads(record.waypoints_json) if record.waypoints_json else None
     return PinResponse(
         id=record.id,
         project_id=record.project_id,
@@ -353,6 +355,7 @@ def _pin_response_from_record(record: PinRecord) -> PinResponse:
         position_x=record.position_x,
         position_y=record.position_y,
         telemetry=telemetry,
+        waypoints=waypoints,
         processing_status=record.processing_status,
         processing_error=record.processing_error,
         captured_on=record.captured_on,
@@ -960,6 +963,13 @@ def process_pin_capture(project_id: str, pin_id: str, request: Request) -> dict[
             result = capture_processor.process(telemetry)
             pin.processing_status = str(result["status"])
             pin.processing_error = None if result["status"] == "ready" else str(result["message"])
+            
+            if result.get("parsed_telemetry"):
+                parsed = result["parsed_telemetry"]
+                waypoint_result = capture_processor.estimate_route_waypoints(parsed)
+                if waypoint_result.get("waypoints"):
+                    pin.waypoints_json = json.dumps(waypoint_result)
+            
             db.commit()
             return result
 
@@ -969,6 +979,13 @@ def process_pin_capture(project_id: str, pin_id: str, request: Request) -> dict[
     result = capture_processor.process(pin.get("telemetry"))
     pin["processing_status"] = str(result["status"])
     pin["processing_error"] = None if result["status"] == "ready" else str(result["message"])
+    
+    if result.get("parsed_telemetry"):
+        parsed = result["parsed_telemetry"]
+        waypoint_result = capture_processor.estimate_route_waypoints(parsed)
+        if waypoint_result.get("waypoints"):
+            pin["waypoints"] = waypoint_result.get("waypoints", [])
+    
     return result
 
 

@@ -269,3 +269,107 @@ def test_capture_processing_boundary_accepts_telemetry_metadata() -> None:
     processed = client.post(f"/projects/{project['id']}/pins/{pin.json()['id']}/process")
     assert processed.status_code == 200
     assert processed.json()["telemetry_received"] is True
+
+
+def test_insp_parser_extracts_timestamped_route_and_motion_metrics() -> None:
+    reset_demo_store()
+
+    from app.capture_processing import CaptureProcessor
+
+    sample = b"""
+    <Insta360>
+      <FileType>INSP</FileType>
+      <Device>ONE X2</Device>
+      <Session>
+        <StartTime>2026-08-20T09:15:00Z</StartTime>
+        <Track>
+          <Point time="2026-08-20T09:15:00Z" x="0.0" y="0.0" z="0.0" yaw="30.0" pitch="5.0" roll="2.0" speed="0.45" />
+          <Point time="2026-08-20T09:15:05Z" x="1.2" y="0.8" z="0.1" yaw="35.0" pitch="6.0" roll="1.5" speed="0.50" />
+          <Point time="2026-08-20T09:15:10Z" x="2.5" y="1.6" z="0.2" yaw="42.0" pitch="7.0" roll="1.0" speed="0.52" />
+        </Track>
+      </Session>
+    </Insta360>
+    """
+
+    telemetry = CaptureProcessor().parse_insp_payload(sample)
+    assert telemetry["source"] == "insp_parser"
+    assert telemetry["device"] == "ONE X2"
+    assert len(telemetry["route"]) == 3
+    assert telemetry["route"][0]["time"] == "2026-08-20T09:15:00Z"
+    assert telemetry["motion"]["average_speed_mps"] > 0
+    assert telemetry["confidence"] >= 0.5
+
+
+def test_route_estimator_normalizes_telemetry_into_floorplan_waypoints() -> None:
+    reset_demo_store()
+
+    from app.capture_processing import CaptureProcessor
+
+    sample_telemetry = {
+        "source": "insp_parser",
+        "device": "ONE X2",
+        "file_type": "INSP",
+        "start_time": "2026-08-20T09:15:00Z",
+        "route": [
+            {"time": "2026-08-20T09:15:00Z", "x": 0.0, "y": 0.0, "z": 0.0, "yaw": 30.0, "pitch": 5.0, "roll": 2.0, "speed_mps": 0.45},
+            {"time": "2026-08-20T09:15:05Z", "x": 1.2, "y": 0.8, "z": 0.1, "yaw": 35.0, "pitch": 6.0, "roll": 1.5, "speed_mps": 0.50},
+            {"time": "2026-08-20T09:15:10Z", "x": 2.5, "y": 1.6, "z": 0.2, "yaw": 42.0, "pitch": 7.0, "roll": 1.0, "speed_mps": 0.52},
+        ],
+        "motion": {"samples": 3, "average_speed_mps": 0.4917, "max_speed_mps": 0.52},
+        "confidence": 0.72,
+    }
+
+    processor = CaptureProcessor()
+    waypoint_result = processor.estimate_route_waypoints(sample_telemetry)
+
+    assert waypoint_result["waypoints"] is not None
+    assert len(waypoint_result["waypoints"]) == 3
+
+    for wp in waypoint_result["waypoints"]:
+        assert 0.0 <= wp["position_x"] <= 1.0
+        assert 0.0 <= wp["position_y"] <= 1.0
+        assert wp["heading"] is not None
+        assert wp["confidence"] > 0
+
+    assert waypoint_result["bounds"] is not None
+    assert "min_x" in waypoint_result["bounds"]
+    assert "max_x" in waypoint_result["bounds"]
+    assert waypoint_result["route_confidence"] > 0
+
+
+def test_capture_processing_stores_waypoints_on_pin_when_telemetry_is_processed() -> None:
+    reset_demo_store()
+
+    project = client.post("/projects", json={"title": "Route Demo"}).json()
+    pin = client.post(
+        f"/projects/{project['id']}/pins",
+        json={
+            "latitude": 5.56,
+            "longitude": -0.24,
+            "heading": 90,
+            "captured_on": "2026-08-20",
+            "telemetry": {
+                "source": "insp_parser",
+                "device": "ONE X2",
+                "route": [
+                    {"time": "2026-08-20T09:15:00Z", "x": 0.0, "y": 0.0, "z": 0.0, "yaw": 30.0, "pitch": 5.0, "roll": 2.0, "speed_mps": 0.45},
+                    {"time": "2026-08-20T09:15:05Z", "x": 1.2, "y": 0.8, "z": 0.1, "yaw": 35.0, "pitch": 6.0, "roll": 1.5, "speed_mps": 0.50},
+                    {"time": "2026-08-20T09:15:10Z", "x": 2.5, "y": 1.6, "z": 0.2, "yaw": 42.0, "pitch": 7.0, "roll": 1.0, "speed_mps": 0.52},
+                ],
+                "motion": {"samples": 3, "average_speed_mps": 0.4917, "max_speed_mps": 0.52},
+                "confidence": 0.72,
+            },
+        },
+    ).json()
+
+    processed = client.post(f"/projects/{project['id']}/pins/{pin['id']}/process")
+    assert processed.status_code == 200
+    assert processed.json()["telemetry_received"] is True
+
+    updated_pin = client.get(f"/projects/{project['id']}/pins/{pin['id']}")
+    assert updated_pin.status_code == 200
+    pin_data = updated_pin.json()
+    assert pin_data["waypoints"] is not None
+    assert len(pin_data["waypoints"]) == 3
+    assert pin_data["waypoints"][0]["position_x"] is not None
+    assert pin_data["waypoints"][0]["position_y"] is not None
