@@ -117,6 +117,12 @@ class PinCreateRequest(BaseModel):
     thumbnail_key: str | None = None
 
 
+class PinCalibrationRequest(BaseModel):
+    position_x: float = Field(ge=0, le=1)
+    position_y: float = Field(ge=0, le=1)
+    note: str | None = Field(default=None, max_length=500)
+
+
 class PinResponse(BaseModel):
     id: str
     project_id: str
@@ -128,6 +134,8 @@ class PinResponse(BaseModel):
     auto_position_x: float | None = None
     auto_position_y: float | None = None
     alignment_confidence: float = 0.0
+    calibration_state: str = "unreviewed"
+    calibration_data: dict[str, Any] | None = None
     telemetry: dict[str, Any] | None = None
     waypoints: list[dict[str, Any]] | None = None
     preview_url: str | None = None
@@ -376,6 +384,7 @@ def _store_preview(project_id: str, pin_id: str, preview_data: bytes) -> str:
 def _pin_response_from_record(record: PinRecord) -> PinResponse:
     telemetry = json.loads(record.telemetry_json) if record.telemetry_json else None
     waypoints = json.loads(record.waypoints_json) if record.waypoints_json else None
+    calibration_data = json.loads(record.calibration_json) if record.calibration_json else None
     preview_url = f"/media/{record.preview_key}" if record.preview_key else None
     return PinResponse(
         id=record.id,
@@ -388,6 +397,8 @@ def _pin_response_from_record(record: PinRecord) -> PinResponse:
         auto_position_x=record.auto_position_x,
         auto_position_y=record.auto_position_y,
         alignment_confidence=record.alignment_confidence,
+        calibration_state=(calibration_data or {}).get("state", "unreviewed"),
+        calibration_data=calibration_data,
         telemetry=telemetry,
         waypoints=waypoints,
         preview_url=preview_url,
@@ -415,6 +426,8 @@ def _pin_response_from_memory(pin: dict[str, Any]) -> PinResponse:
         auto_position_x=pin.get("auto_position_x"),
         auto_position_y=pin.get("auto_position_y"),
         alignment_confidence=pin.get("alignment_confidence", 0.0),
+        calibration_state=pin.get("calibration_state", "unreviewed"),
+        calibration_data=pin.get("calibration_data"),
         telemetry=pin.get("telemetry"),
         waypoints=pin.get("waypoints"),
         preview_url=preview_url,
@@ -859,6 +872,7 @@ def create_pin(project_id: str, payload: PinCreateRequest, request: Request) -> 
                 heading=payload.heading,
                 position_x=payload.position_x,
                 position_y=payload.position_y,
+                calibration_json=None,
                 telemetry_json=json.dumps(payload.telemetry) if payload.telemetry else None,
                 processing_status="metadata_received" if payload.telemetry else "not_requested",
                 captured_on=payload.captured_on,
@@ -886,6 +900,8 @@ def create_pin(project_id: str, payload: PinCreateRequest, request: Request) -> 
         "auto_position_x": None,
         "auto_position_y": None,
         "alignment_confidence": 0.0,
+        "calibration_state": "unreviewed",
+        "calibration_data": None,
         "telemetry": payload.telemetry,
         "waypoints": None,
         "preview_key": None,
@@ -899,6 +915,46 @@ def create_pin(project_id: str, payload: PinCreateRequest, request: Request) -> 
     }
     pins_by_project[project_id].append(pin)
     pins_by_id[pin_id] = pin
+    return _pin_response_from_memory(pin)
+
+
+@app.patch("/projects/{project_id}/pins/{pin_id}/calibration", response_model=PinResponse, tags=["pins"])
+def update_pin_calibration(
+    project_id: str,
+    pin_id: str,
+    payload: PinCalibrationRequest,
+    request: Request,
+) -> PinResponse:
+    """Save a reviewer-verified floor-plan position while preserving auto-calibration."""
+    user_id = _get_user_id(request)
+    _ensure_project_ownership(project_id, user_id)
+    calibration_update = {
+        "state": "manually_verified",
+        "position_x": payload.position_x,
+        "position_y": payload.position_y,
+        "reviewed_by": user_id,
+        "note": payload.note,
+    }
+
+    if PERSISTENCE_MODE == "database":
+        with SessionLocal() as db:
+            pin = db.get(PinRecord, pin_id)
+            if not pin or pin.project_id != project_id:
+                raise HTTPException(status_code=404, detail="Pin not found")
+            pin.position_x = payload.position_x
+            pin.position_y = payload.position_y
+            pin.calibration_json = json.dumps(calibration_update)
+            db.commit()
+            db.refresh(pin)
+            return _pin_response_from_record(pin)
+
+    pin = pins_by_id.get(pin_id)
+    if not pin or pin["project_id"] != project_id:
+        raise HTTPException(status_code=404, detail="Pin not found")
+    pin["position_x"] = payload.position_x
+    pin["position_y"] = payload.position_y
+    pin["calibration_state"] = calibration_update["state"]
+    pin["calibration_data"] = calibration_update
     return _pin_response_from_memory(pin)
 
 

@@ -9,7 +9,7 @@ function buildApiBases() {
 }
 
 const apiBases = buildApiBases();
-const state = { project: null, plan: null, start: null, current: null, distance: 0, heading: 0, viewer: null, timer: null };
+const state = { project: null, plan: null, start: null, current: null, distance: 0, heading: 0, viewer: null, timer: null, calibrationPin: null };
 const byId = (id) => document.getElementById(id);
 
 function setStatus(text) { byId('plan-status').textContent = text; }
@@ -55,7 +55,7 @@ function renderWaypoints() {
   (state.project?.pins || []).forEach((pin, index) => {
     if (pin.position_x == null || pin.position_y == null) return;
     const dot = document.createElement('button');
-    dot.type = 'button'; dot.className = 'waypoint'; dot.dataset.label = `#${index + 1}`;
+    dot.type = 'button'; dot.className = `waypoint ${pin.calibration_state === 'manually_verified' ? 'verified' : ''}`; dot.dataset.label = `#${index + 1}`;
     dot.style.left = `${pin.position_x * 100}%`; dot.style.top = `${pin.position_y * 100}%`;
     dot.title = `Open capture ${index + 1}`;
     dot.addEventListener('click', (event) => { event.stopPropagation(); openCapture(pin, index + 1); });
@@ -66,6 +66,25 @@ function renderWaypoints() {
     current.style.left = `${state.current.x * 100}%`; current.style.top = `${state.current.y * 100}%`; layer.appendChild(current);
   }
   byId('waypoint-count').textContent = String((state.project?.pins || []).filter((pin) => pin.position_x != null).length);
+  renderCalibrationList();
+}
+
+function renderCalibrationList() {
+  const list = byId('calibration-list');
+  if (!list) return;
+  const pins = (state.project?.pins || []).filter((pin) => pin.auto_position_x != null || pin.calibration_state === 'manually_verified');
+  if (!pins.length) { list.innerHTML = '<li class="small">No auto-placed captures yet.</li>'; return; }
+  list.innerHTML = '';
+  pins.forEach((pin) => {
+    const index = state.project.pins.indexOf(pin) + 1;
+    const item = document.createElement('li'); item.className = 'calibration-item';
+    const confidence = Math.round((pin.alignment_confidence || 0) * 100);
+    const stateLabel = pin.calibration_state === 'manually_verified' ? 'Verified' : `Auto ${confidence}%`;
+    item.innerHTML = `<span><strong>Capture #${index}</strong><small>${stateLabel} · ${Math.round((pin.position_x || 0) * 100)}%, ${Math.round((pin.position_y || 0) * 100)}%</small></span>`;
+    const button = document.createElement('button'); button.type = 'button'; button.className = 'quiet'; button.textContent = 'Correct on plan';
+    button.addEventListener('click', () => { state.calibrationPin = pin; setStatus(`Click the verified location for capture #${index}.`); });
+    item.appendChild(button); list.appendChild(item);
+  });
 }
 
 function setCurrent(x, y, isStart = false) {
@@ -79,8 +98,20 @@ function handlePlanClick(event) {
   const drawing = byId('plan-image') || byId('plan-canvas');
   if (!drawing) return;
   const rect = drawing.getBoundingClientRect();
-  setCurrent((event.clientX - rect.left) / rect.width, (event.clientY - rect.top) / rect.height, !state.start);
+  const x = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+  const y = Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height));
+  if (state.calibrationPin) { saveCalibration(state.calibrationPin, x, y); return; }
+  setCurrent(x, y, !state.start);
   setStatus(state.start && state.distance ? 'Current route position updated.' : 'Starting point set. Walk a step or save a capture.');
+}
+
+async function saveCalibration(pin, x, y) {
+  const index = state.project.pins.indexOf(pin) + 1;
+  setStatus(`Saving verified position for capture #${index}...`);
+  try {
+    const updated = await apiRequest(`/projects/${state.project.id}/pins/${pin.id}/calibration`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ position_x: Number(x.toFixed(4)), position_y: Number(y.toFixed(4)), note: 'Verified on floor plan.' }) });
+    Object.assign(pin, updated); state.calibrationPin = null; renderWaypoints(); setStatus(`Capture #${index} verified at ${Math.round(x * 100)}%, ${Math.round(y * 100)}%.`);
+  } catch (error) { setStatus(`Calibration save failed: ${error.message}`); }
 }
 
 function stepRoute() {
@@ -140,7 +171,7 @@ async function loadProjects() {
 }
 
 async function selectProject(projectId) {
-  try { state.project = await apiRequest(`/projects/${projectId}/review`); state.start = null; state.current = null; state.distance = 0; byId('route-distance').textContent = '0.0 ft'; renderPlan(); renderWaypoints(); setStatus(`${state.project.title} loaded. Upload a plan or choose a saved route.`); }
+  try { state.project = await apiRequest(`/projects/${projectId}/review`); state.start = null; state.current = null; state.calibrationPin = null; state.distance = 0; byId('route-distance').textContent = '0.0 ft'; renderPlan(); renderWaypoints(); setStatus(`${state.project.title} loaded. Upload a plan or choose a saved route.`); }
   catch (error) { setStatus(`Could not load project: ${error.message}`); }
 }
 

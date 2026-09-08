@@ -647,3 +647,59 @@ def test_capture_processing_stores_auto_position_when_waypoints_exist() -> None:
     assert pin_data["alignment_confidence"] <= 1.0
 
 
+def test_manual_calibration_updates_position_and_records_verification() -> None:
+    reset_demo_store()
+
+    project = client.post("/projects", json={"title": "Review Calibration"}).json()
+    pin = client.post(
+        f"/projects/{project['id']}/pins",
+        json={
+            "latitude": 5.56,
+            "longitude": -0.24,
+            "heading": 90,
+            "position_x": 0.2,
+            "position_y": 0.3,
+            "captured_on": "2026-08-20",
+        },
+    ).json()
+
+    response = client.patch(
+        f"/projects/{project['id']}/pins/{pin['id']}/calibration",
+        json={"position_x": 0.72, "position_y": 0.41, "note": "Matched the east corridor junction."},
+    )
+
+    assert response.status_code == 200
+    calibrated = response.json()
+    assert calibrated["position_x"] == 0.72
+    assert calibrated["position_y"] == 0.41
+    assert calibrated["calibration_state"] == "manually_verified"
+    assert calibrated["calibration_data"]["reviewed_by"] == "demo"
+    assert calibrated["calibration_data"]["note"] == "Matched the east corridor junction."
+
+    fetched = client.get(f"/projects/{project['id']}/pins/{pin['id']}").json()
+    assert fetched["calibration_state"] == "manually_verified"
+    assert fetched["position_x"] == 0.72
+
+
+def test_manual_calibration_rejects_coordinates_outside_floor_plan() -> None:
+    reset_demo_store()
+
+    project = client.post("/projects", json={"title": "Calibration Bounds"}).json()
+    pin = client.post(
+        f"/projects/{project['id']}/pins",
+        json={
+            "latitude": 5.56,
+            "longitude": -0.24,
+            "heading": 90,
+            "captured_on": "2026-08-20",
+        },
+    ).json()
+
+    response = client.patch(
+        f"/projects/{project['id']}/pins/{pin['id']}/calibration",
+        json={"position_x": 1.2, "position_y": 0.5},
+    )
+
+    assert response.status_code == 422
+
+
