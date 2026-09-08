@@ -31,6 +31,9 @@
       .calibration-item { display: grid; grid-template-columns: 1fr auto; gap: 0.5rem; align-items: center; border-top: 1px solid var(--border); padding-top: 0.55rem; }
       .calibration-item small { display: block; color: var(--muted); }
       .calibration-item button { min-height: 0; padding: 0.35rem 0.5rem; font-size: 0.75rem; }
+      .annotation-list { display: grid; gap: 0.5rem; padding: 0; margin: 0; list-style: none; }
+      .annotation-item { border-top: 1px solid var(--border); padding-top: 0.55rem; }
+      .annotation-dot { background: var(--danger); }
       .small { color: var(--muted); font-size: 0.8rem; }
       .modal { position: fixed; inset: 0; display: none; place-items: center; padding: 1rem; background: rgba(20, 23, 26, 0.78); z-index: 5; }
       .modal.open { display: grid; }
@@ -94,6 +97,14 @@
             <h2>Calibration review</h2>
             <p class="small">Auto-placed captures remain editable. Choose a pin, then click its verified location on the drawing.</p>
             <ul id="calibration-list" class="calibration-list"><li class="small">No auto-placed captures yet.</li></ul>
+          </section>
+          <section class="panel stack">
+            <h2>Plan notes</h2>
+            <p class="small">Add a note, then click the exact location on the drawing.</p>
+            <input id="annotation-body" maxlength="1000" placeholder="What needs attention?" />
+            <select id="annotation-pin"><option value="">General plan note</option></select>
+            <button id="add-annotation" class="secondary" type="button">Place note on plan</button>
+            <ul id="annotation-list" class="annotation-list"><li class="small">No notes yet.</li></ul>
           </section>
         </aside>
       </div>

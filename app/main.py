@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.camera_adapter import Insta360CameraAdapter
 from app.capture_processing import CaptureProcessor
-from app.models import Base, PinRecord, ProjectRecord, ShareLinkRecord
+from app.models import AnnotationRecord, Base, PinRecord, ProjectRecord, ShareLinkRecord
 
 load_dotenv()
 
@@ -148,6 +148,27 @@ class PinResponse(BaseModel):
     thumbnail_key: str | None = None
 
 
+class AnnotationCreateRequest(BaseModel):
+    body: str = Field(min_length=1, max_length=1000)
+    floor_plan_x: float = Field(ge=0, le=1)
+    floor_plan_y: float = Field(ge=0, le=1)
+    pin_id: str | None = None
+    status: str = Field(default="open", pattern="^(open|in_progress|resolved)$")
+    assigned_to: str | None = Field(default=None, max_length=128)
+
+
+class AnnotationResponse(BaseModel):
+    id: str
+    project_id: str
+    pin_id: str | None = None
+    author_id: str
+    body: str
+    status: str
+    assigned_to: str | None = None
+    floor_plan_x: float
+    floor_plan_y: float
+
+
 class ProjectDetailResponse(BaseModel):
     id: str
     title: str
@@ -203,6 +224,8 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 projects: dict[str, dict[str, Any]] = {}
 pins_by_project: dict[str, list[dict[str, Any]]] = {}
 pins_by_id: dict[str, dict[str, Any]] = {}
+annotations_by_project: dict[str, list[dict[str, Any]]] = {}
+annotations_by_id: dict[str, dict[str, Any]] = {}
 project_share_tokens: dict[str, str] = {}
 share_token_to_project: dict[str, str] = {}
 
@@ -264,12 +287,15 @@ def reset_demo_store() -> None:
     projects.clear()
     pins_by_project.clear()
     pins_by_id.clear()
+    annotations_by_project.clear()
+    annotations_by_id.clear()
     project_share_tokens.clear()
     share_token_to_project.clear()
 
     if PERSISTENCE_MODE == "database":
         with SessionLocal() as db:
             db.query(ShareLinkRecord).delete()
+            db.query(AnnotationRecord).delete()
             db.query(PinRecord).delete()
             db.query(ProjectRecord).delete()
             db.commit()
@@ -439,6 +465,24 @@ def _pin_response_from_memory(pin: dict[str, Any]) -> PinResponse:
         native_file_key=pin.get("native_file_key"),
         thumbnail_key=pin.get("thumbnail_key"),
     )
+
+
+def _annotation_response_from_record(record: AnnotationRecord) -> AnnotationResponse:
+    return AnnotationResponse(
+        id=record.id,
+        project_id=record.project_id,
+        pin_id=record.pin_id,
+        author_id=record.author_id,
+        body=record.body,
+        status=record.status,
+        assigned_to=record.assigned_to,
+        floor_plan_x=record.floor_plan_x,
+        floor_plan_y=record.floor_plan_y,
+    )
+
+
+def _annotation_response_from_memory(annotation: dict[str, Any]) -> AnnotationResponse:
+    return AnnotationResponse(**annotation)
 
 
 def _project_response_from_record(db: Session, record: ProjectRecord) -> ProjectResponse:
@@ -852,6 +896,72 @@ def open_shared_project(share_token: str) -> ProjectDetailResponse:
         raise HTTPException(status_code=404, detail="Share link not found")
 
     return _build_project_detail_memory(project_id)
+
+
+@app.post("/projects/{project_id}/annotations", response_model=AnnotationResponse, status_code=201, tags=["annotations"])
+def create_annotation(project_id: str, payload: AnnotationCreateRequest, request: Request) -> AnnotationResponse:
+    user_id = _get_user_id(request)
+    _ensure_project_ownership(project_id, user_id)
+    annotation_id = str(uuid4())
+
+    if PERSISTENCE_MODE == "database":
+        with SessionLocal() as db:
+            if not db.get(ProjectRecord, project_id):
+                raise HTTPException(status_code=404, detail="Project not found")
+            if payload.pin_id:
+                pin = db.get(PinRecord, payload.pin_id)
+                if not pin or pin.project_id != project_id:
+                    raise HTTPException(status_code=404, detail="Pin not found in project")
+            annotation = AnnotationRecord(
+                id=annotation_id,
+                project_id=project_id,
+                pin_id=payload.pin_id,
+                author_id=user_id,
+                body=payload.body,
+                status=payload.status,
+                assigned_to=payload.assigned_to,
+                floor_plan_x=payload.floor_plan_x,
+                floor_plan_y=payload.floor_plan_y,
+            )
+            db.add(annotation)
+            db.commit()
+            db.refresh(annotation)
+            return _annotation_response_from_record(annotation)
+
+    if project_id not in projects:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if payload.pin_id:
+        pin = pins_by_id.get(payload.pin_id)
+        if not pin or pin["project_id"] != project_id:
+            raise HTTPException(status_code=404, detail="Pin not found in project")
+    annotation = {
+        "id": annotation_id,
+        "project_id": project_id,
+        "pin_id": payload.pin_id,
+        "author_id": user_id,
+        "body": payload.body,
+        "status": payload.status,
+        "assigned_to": payload.assigned_to,
+        "floor_plan_x": payload.floor_plan_x,
+        "floor_plan_y": payload.floor_plan_y,
+    }
+    annotations_by_project.setdefault(project_id, []).append(annotation)
+    annotations_by_id[annotation_id] = annotation
+    return _annotation_response_from_memory(annotation)
+
+
+@app.get("/projects/{project_id}/annotations", response_model=list[AnnotationResponse], tags=["annotations"])
+def list_annotations(project_id: str, request: Request) -> list[AnnotationResponse]:
+    _ensure_project_ownership(project_id, _get_user_id(request))
+    if PERSISTENCE_MODE == "database":
+        with SessionLocal() as db:
+            if not db.get(ProjectRecord, project_id):
+                raise HTTPException(status_code=404, detail="Project not found")
+            records = db.query(AnnotationRecord).filter(AnnotationRecord.project_id == project_id).all()
+            return [_annotation_response_from_record(record) for record in records]
+    if project_id not in projects:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return [_annotation_response_from_memory(item) for item in annotations_by_project.get(project_id, [])]
 
 
 @app.post("/projects/{project_id}/pins", response_model=PinResponse, status_code=201, tags=["pins"])

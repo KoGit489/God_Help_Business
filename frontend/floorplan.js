@@ -9,7 +9,7 @@ function buildApiBases() {
 }
 
 const apiBases = buildApiBases();
-const state = { project: null, plan: null, start: null, current: null, distance: 0, heading: 0, viewer: null, timer: null, calibrationPin: null };
+const state = { project: null, plan: null, start: null, current: null, distance: 0, heading: 0, viewer: null, timer: null, calibrationPin: null, annotationMode: false, annotations: [] };
 const byId = (id) => document.getElementById(id);
 
 function setStatus(text) { byId('plan-status').textContent = text; }
@@ -61,12 +61,24 @@ function renderWaypoints() {
     dot.addEventListener('click', (event) => { event.stopPropagation(); openCapture(pin, index + 1); });
     layer.appendChild(dot);
   });
+  state.annotations.forEach((annotation, index) => {
+    const dot = document.createElement('div'); dot.className = 'waypoint annotation-dot'; dot.dataset.label = `N${index + 1}`;
+    dot.style.left = `${annotation.floor_plan_x * 100}%`; dot.style.top = `${annotation.floor_plan_y * 100}%`; dot.title = annotation.body;
+    layer.appendChild(dot);
+  });
   if (state.current && !state.current.saved) {
     const current = document.createElement('div'); current.className = 'waypoint current'; current.dataset.label = 'Current';
     current.style.left = `${state.current.x * 100}%`; current.style.top = `${state.current.y * 100}%`; layer.appendChild(current);
   }
   byId('waypoint-count').textContent = String((state.project?.pins || []).filter((pin) => pin.position_x != null).length);
   renderCalibrationList();
+  renderAnnotationList();
+}
+
+function renderAnnotationList() {
+  const list = byId('annotation-list'); if (!list) return;
+  if (!state.annotations.length) { list.innerHTML = '<li class="small">No notes yet.</li>'; return; }
+  list.innerHTML = state.annotations.map((annotation, index) => `<li class="annotation-item"><strong>N${index + 1} · ${annotation.status.replace('_', ' ')}</strong><br /><span class="small">${annotation.body}</span></li>`).join('');
 }
 
 function renderCalibrationList() {
@@ -101,8 +113,19 @@ function handlePlanClick(event) {
   const x = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
   const y = Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height));
   if (state.calibrationPin) { saveCalibration(state.calibrationPin, x, y); return; }
+  if (state.annotationMode) { saveAnnotation(x, y); return; }
   setCurrent(x, y, !state.start);
   setStatus(state.start && state.distance ? 'Current route position updated.' : 'Starting point set. Walk a step or save a capture.');
+}
+
+async function saveAnnotation(x, y) {
+  const body = byId('annotation-body').value.trim();
+  if (!body) { setStatus('Enter a note before placing it on the plan.'); return; }
+  setStatus('Saving plan note...');
+  try {
+    const created = await apiRequest(`/projects/${state.project.id}/annotations`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body, floor_plan_x: Number(x.toFixed(4)), floor_plan_y: Number(y.toFixed(4)), pin_id: byId('annotation-pin').value || null }) });
+    state.annotations.push(created); state.annotationMode = false; byId('annotation-body').value = ''; renderWaypoints(); setStatus('Plan note saved.');
+  } catch (error) { setStatus(`Note save failed: ${error.message}`); }
 }
 
 async function saveCalibration(pin, x, y) {
@@ -171,7 +194,12 @@ async function loadProjects() {
 }
 
 async function selectProject(projectId) {
-  try { state.project = await apiRequest(`/projects/${projectId}/review`); state.start = null; state.current = null; state.calibrationPin = null; state.distance = 0; byId('route-distance').textContent = '0.0 ft'; renderPlan(); renderWaypoints(); setStatus(`${state.project.title} loaded. Upload a plan or choose a saved route.`); }
+  try {
+    state.project = await apiRequest(`/projects/${projectId}/review`); state.annotations = await apiRequest(`/projects/${projectId}/annotations`); state.start = null; state.current = null; state.calibrationPin = null; state.annotationMode = false; state.distance = 0; byId('route-distance').textContent = '0.0 ft';
+    const pinSelect = byId('annotation-pin'); pinSelect.innerHTML = '<option value="">General plan note</option>';
+    state.project.pins.forEach((pin, index) => { const option = document.createElement('option'); option.value = pin.id; option.textContent = `Capture #${index + 1}`; pinSelect.appendChild(option); });
+    renderPlan(); renderWaypoints(); setStatus(`${state.project.title} loaded. Upload a plan or choose a saved route.`);
+  }
   catch (error) { setStatus(`Could not load project: ${error.message}`); }
 }
 
@@ -187,6 +215,7 @@ byId('plan-wrap').addEventListener('click', handlePlanClick);
 byId('heading').addEventListener('input', (event) => { state.heading = Number(event.target.value); byId('heading-value').textContent = `${state.heading}°`; });
 byId('walk-step').addEventListener('click', stepRoute);
 byId('save-waypoint').addEventListener('click', saveWaypoint);
+byId('add-annotation').addEventListener('click', () => { if (!state.project) return; state.annotationMode = true; state.calibrationPin = null; setStatus('Click the note location on the floor plan.'); });
 byId('update-mode').addEventListener('change', (event) => {
   if (state.timer) { clearInterval(state.timer); state.timer = null; }
   if (event.target.value === 'interval') {

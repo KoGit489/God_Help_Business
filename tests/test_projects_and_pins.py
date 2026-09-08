@@ -703,3 +703,63 @@ def test_manual_calibration_rejects_coordinates_outside_floor_plan() -> None:
     assert response.status_code == 422
 
 
+def test_annotations_can_be_created_linked_to_a_pin_and_listed() -> None:
+    reset_demo_store()
+
+    project = client.post("/projects", json={"title": "Markup Review"}).json()
+    pin = client.post(
+        f"/projects/{project['id']}/pins",
+        json={
+            "latitude": 5.56,
+            "longitude": -0.24,
+            "heading": 90,
+            "captured_on": "2026-08-20",
+        },
+    ).json()
+
+    created = client.post(
+        f"/projects/{project['id']}/annotations",
+        json={
+            "body": "Check the conduit at this wall junction.",
+            "floor_plan_x": 0.64,
+            "floor_plan_y": 0.28,
+            "pin_id": pin["id"],
+            "status": "in_progress",
+            "assigned_to": "field-team",
+        },
+    )
+
+    assert created.status_code == 201
+    annotation = created.json()
+    assert annotation["pin_id"] == pin["id"]
+    assert annotation["status"] == "in_progress"
+    assert annotation["author_id"] == "demo"
+
+    listed = client.get(f"/projects/{project['id']}/annotations")
+    assert listed.status_code == 200
+    assert listed.json() == [annotation]
+
+
+def test_annotations_reject_invalid_status_or_foreign_pin() -> None:
+    reset_demo_store()
+
+    first_project = client.post("/projects", json={"title": "First Markup Project"}).json()
+    second_project = client.post("/projects", json={"title": "Second Markup Project"}).json()
+    foreign_pin = client.post(
+        f"/projects/{second_project['id']}/pins",
+        json={"latitude": 5.56, "longitude": -0.24, "heading": 90, "captured_on": "2026-08-20"},
+    ).json()
+
+    invalid_status = client.post(
+        f"/projects/{first_project['id']}/annotations",
+        json={"body": "Bad status", "floor_plan_x": 0.5, "floor_plan_y": 0.5, "status": "closed"},
+    )
+    assert invalid_status.status_code == 422
+
+    foreign_link = client.post(
+        f"/projects/{first_project['id']}/annotations",
+        json={"body": "Wrong project", "floor_plan_x": 0.5, "floor_plan_y": 0.5, "pin_id": foreign_pin["id"]},
+    )
+    assert foreign_link.status_code == 404
+
+
