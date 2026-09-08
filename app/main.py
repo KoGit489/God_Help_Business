@@ -125,6 +125,9 @@ class PinResponse(BaseModel):
     heading: float
     position_x: float | None = None
     position_y: float | None = None
+    auto_position_x: float | None = None
+    auto_position_y: float | None = None
+    alignment_confidence: float = 0.0
     telemetry: dict[str, Any] | None = None
     waypoints: list[dict[str, Any]] | None = None
     preview_url: str | None = None
@@ -382,6 +385,9 @@ def _pin_response_from_record(record: PinRecord) -> PinResponse:
         heading=record.heading,
         position_x=record.position_x,
         position_y=record.position_y,
+        auto_position_x=record.auto_position_x,
+        auto_position_y=record.auto_position_y,
+        alignment_confidence=record.alignment_confidence,
         telemetry=telemetry,
         waypoints=waypoints,
         preview_url=preview_url,
@@ -406,6 +412,9 @@ def _pin_response_from_memory(pin: dict[str, Any]) -> PinResponse:
         heading=pin["heading"],
         position_x=pin["position_x"],
         position_y=pin["position_y"],
+        auto_position_x=pin.get("auto_position_x"),
+        auto_position_y=pin.get("auto_position_y"),
+        alignment_confidence=pin.get("alignment_confidence", 0.0),
         telemetry=pin.get("telemetry"),
         waypoints=pin.get("waypoints"),
         preview_url=preview_url,
@@ -874,6 +883,9 @@ def create_pin(project_id: str, payload: PinCreateRequest, request: Request) -> 
         "heading": payload.heading,
         "position_x": payload.position_x,
         "position_y": payload.position_y,
+        "auto_position_x": None,
+        "auto_position_y": None,
+        "alignment_confidence": 0.0,
         "telemetry": payload.telemetry,
         "waypoints": None,
         "preview_key": None,
@@ -887,27 +899,7 @@ def create_pin(project_id: str, payload: PinCreateRequest, request: Request) -> 
     }
     pins_by_project[project_id].append(pin)
     pins_by_id[pin_id] = pin
-    
-    preview_url = f"/media/{pin['preview_key']}" if pin['preview_key'] else None
-    return PinResponse(
-        id=pin["id"],
-        project_id=pin["project_id"],
-        latitude=pin["latitude"],
-        longitude=pin["longitude"],
-        heading=pin["heading"],
-        position_x=pin["position_x"],
-        position_y=pin["position_y"],
-        telemetry=pin["telemetry"],
-        waypoints=pin["waypoints"],
-        preview_url=preview_url,
-        processing_status=pin["processing_status"],
-        processing_error=pin["processing_error"],
-        captured_on=pin["captured_on"],
-        photo_key=pin["photo_key"],
-        media_type=pin["media_type"],
-        native_file_key=pin["native_file_key"],
-        thumbnail_key=pin["thumbnail_key"],
-    )
+    return _pin_response_from_memory(pin)
 
 
 @app.get("/projects/{project_id}/pins", response_model=list[PinResponse], tags=["pins"])
@@ -1044,6 +1036,12 @@ def process_pin_capture(project_id: str, pin_id: str, request: Request) -> dict[
                 waypoint_result = capture_processor.estimate_route_waypoints(parsed)
                 if waypoint_result.get("waypoints"):
                     pin.waypoints_json = json.dumps(waypoint_result)
+                    
+                    calibration_result = capture_processor.calibrate_to_floor_plan(waypoint_result)
+                    pin.auto_position_x = calibration_result.get("auto_position_x")
+                    pin.auto_position_y = calibration_result.get("auto_position_y")
+                    pin.alignment_confidence = calibration_result.get("alignment_confidence", 0.0)
+                    pin.calibration_json = json.dumps(calibration_result)
             
             if pin.native_file_key and not pin.preview_key:
                 native_key_relative = pin.native_file_key.removeprefix("uploads/")
@@ -1069,6 +1067,11 @@ def process_pin_capture(project_id: str, pin_id: str, request: Request) -> dict[
         waypoint_result = capture_processor.estimate_route_waypoints(parsed)
         if waypoint_result.get("waypoints"):
             pin["waypoints"] = waypoint_result.get("waypoints", [])
+            
+            calibration_result = capture_processor.calibrate_to_floor_plan(waypoint_result)
+            pin["auto_position_x"] = calibration_result.get("auto_position_x")
+            pin["auto_position_y"] = calibration_result.get("auto_position_y")
+            pin["alignment_confidence"] = calibration_result.get("alignment_confidence", 0.0)
     
     if pin.get("native_file_key") and not pin.get("preview_key"):
         native_key_relative = pin["native_file_key"].removeprefix("uploads/")

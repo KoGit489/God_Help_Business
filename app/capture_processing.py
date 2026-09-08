@@ -287,6 +287,85 @@ class CaptureProcessor:
                     "message": f"Could not extract or generate preview: {str(fallback_error)[:200]}",
                 }
 
+    def calibrate_to_floor_plan(self, waypoint_result: dict[str, Any]) -> dict[str, Any]:
+        """Calibrate normalized waypoints to floor-plan position and calculate alignment confidence."""
+        waypoints = waypoint_result.get("waypoints", [])
+        bounds = waypoint_result.get("bounds", {})
+        
+        if not waypoints:
+            return {
+                "source": "calibration",
+                "auto_position_x": None,
+                "auto_position_y": None,
+                "alignment_confidence": 0.0,
+                "route_coverage": 0.0,
+                "motion_quality": 0.0,
+                "calibration_hint": "Calibration skipped: no waypoints available.",
+            }
+        
+        positions_x = [wp.get("position_x", 0.5) for wp in waypoints]
+        positions_y = [wp.get("position_y", 0.5) for wp in waypoints]
+        speeds = [wp.get("speed_mps", 0.0) for wp in waypoints]
+        confidences = [wp.get("confidence", 0.5) for wp in waypoints]
+        
+        center_x = sum(positions_x) / len(positions_x)
+        center_y = sum(positions_y) / len(positions_y)
+        
+        center_x = max(0.0, min(1.0, center_x))
+        center_y = max(0.0, min(1.0, center_y))
+        
+        spread_x = max(positions_x) - min(positions_x) if len(positions_x) > 1 else 0.0
+        spread_y = max(positions_y) - min(positions_y) if len(positions_y) > 1 else 0.0
+        
+        coverage_metric = (spread_x + spread_y) / 2.0
+        coverage_score = min(0.35, coverage_metric * 0.35)
+        
+        motion_quality = 0.0
+        if len(speeds) > 2:
+            avg_speed = sum(speeds) / len(speeds)
+            speed_variance = sum((s - avg_speed) ** 2 for s in speeds) / len(speeds)
+            motion_consistency = 1.0 / (1.0 + (speed_variance ** 0.5))
+            motion_quality = 0.15 * motion_consistency + 0.05
+        elif len(speeds) == 2:
+            avg_speed = sum(speeds) / len(speeds)
+            motion_quality = 0.1 if avg_speed > 0.3 else 0.05
+        else:
+            motion_quality = 0.03
+        
+        avg_confidence = sum(confidences) / len(confidences) if confidences else 0.5
+        telemetry_quality = (avg_confidence - 0.5) * 0.15 + 0.08
+        
+        route_samples_score = min(0.2, len(waypoints) / 25.0)
+        
+        alignment_base = coverage_score + motion_quality + telemetry_quality + route_samples_score
+        alignment_confidence = round(min(0.95, max(0.3, alignment_base)), 4)
+        
+        spread_description = "wide" if coverage_metric > 0.6 else ("moderate" if coverage_metric > 0.3 else "narrow")
+        avg_speed = sum(speeds) / len(speeds) if speeds else 0.0
+        if avg_speed < 0.1:
+            motion_description = "stationary"
+        elif motion_quality > 0.15:
+            motion_description = "consistent"
+        elif motion_quality > 0.08:
+            motion_description = "variable"
+        else:
+            motion_description = "stationary"
+        
+        calibration_hint = f"Auto-placement with {int(alignment_confidence * 100)}% confidence: route spread is {spread_description}, motion is {motion_description}. Recommend manual verification for critical captures."
+        
+        return {
+            "source": "calibration",
+            "auto_position_x": round(center_x, 4),
+            "auto_position_y": round(center_y, 4),
+            "alignment_confidence": alignment_confidence,
+            "route_coverage": round(coverage_metric, 4),
+            "motion_quality": round(motion_quality, 4),
+            "telemetry_quality": round(telemetry_quality, 4),
+            "route_samples": len(waypoints),
+            "calibration_hint": calibration_hint,
+            "manual_calibration_enabled": True,
+        }
+
     def status(self) -> CaptureProcessingStatus:
         if self.provider == "insp_parser":
             return CaptureProcessingStatus(

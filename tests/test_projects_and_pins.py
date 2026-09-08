@@ -509,3 +509,141 @@ def test_preview_can_be_served_through_media_endpoint() -> None:
     finally:
         tmp_path.unlink()
 
+
+def test_floor_plan_calibrator_centers_waypoints_on_wide_route() -> None:
+    reset_demo_store()
+
+    from app.capture_processing import CaptureProcessor
+
+    waypoint_result = {
+        "waypoints": [
+            {"position_x": 0.2, "position_y": 0.3, "speed_mps": 0.5, "confidence": 0.7},
+            {"position_x": 0.5, "position_y": 0.5, "speed_mps": 0.6, "confidence": 0.75},
+            {"position_x": 0.8, "position_y": 0.7, "speed_mps": 0.55, "confidence": 0.72},
+        ],
+        "bounds": {"min_x": 0.0, "max_x": 1.0, "min_y": 0.0, "max_y": 1.0},
+        "route_confidence": 0.72,
+    }
+
+    processor = CaptureProcessor()
+    calibration = processor.calibrate_to_floor_plan(waypoint_result)
+
+    assert calibration["source"] == "calibration"
+    assert calibration["auto_position_x"] is not None
+    assert calibration["auto_position_y"] is not None
+    assert 0.0 <= calibration["auto_position_x"] <= 1.0
+    assert 0.0 <= calibration["auto_position_y"] <= 1.0
+    assert calibration["alignment_confidence"] > 0.3
+    assert "moderate" in calibration["calibration_hint"].lower()
+    assert calibration["manual_calibration_enabled"] is True
+
+
+def test_floor_plan_calibrator_assesses_motion_quality() -> None:
+    reset_demo_store()
+
+    from app.capture_processing import CaptureProcessor
+
+    stationary_result = {
+        "waypoints": [
+            {"position_x": 0.5, "position_y": 0.5, "speed_mps": 0.01, "confidence": 0.7},
+            {"position_x": 0.5, "position_y": 0.5, "speed_mps": 0.02, "confidence": 0.7},
+            {"position_x": 0.5, "position_y": 0.5, "speed_mps": 0.01, "confidence": 0.7},
+        ],
+        "bounds": {"min_x": 0.45, "max_x": 0.55, "min_y": 0.45, "max_y": 0.55},
+        "route_confidence": 0.6,
+    }
+
+    processor = CaptureProcessor()
+    stationary_calib = processor.calibrate_to_floor_plan(stationary_result)
+
+    assert stationary_calib["motion_quality"] < 0.21
+    assert "stationary" in stationary_calib["calibration_hint"].lower()
+
+    moving_result = {
+        "waypoints": [
+            {"position_x": 0.1, "position_y": 0.1, "speed_mps": 0.8, "confidence": 0.8},
+            {"position_x": 0.5, "position_y": 0.5, "speed_mps": 0.8, "confidence": 0.8},
+            {"position_x": 0.9, "position_y": 0.9, "speed_mps": 0.8, "confidence": 0.8},
+        ],
+        "bounds": {"min_x": 0.0, "max_x": 1.0, "min_y": 0.0, "max_y": 1.0},
+        "route_confidence": 0.8,
+    }
+
+    moving_calib = processor.calibrate_to_floor_plan(moving_result)
+    assert moving_calib["motion_quality"] > 0.15
+    assert "consistent" in moving_calib["calibration_hint"].lower()
+
+
+def test_floor_plan_calibrator_returns_confidence_score() -> None:
+    reset_demo_store()
+
+    from app.capture_processing import CaptureProcessor
+
+    processor = CaptureProcessor()
+
+    narrow_route = {
+        "waypoints": [
+            {"position_x": 0.49, "position_y": 0.49, "speed_mps": 0.1, "confidence": 0.5},
+            {"position_x": 0.5, "position_y": 0.5, "speed_mps": 0.1, "confidence": 0.5},
+            {"position_x": 0.51, "position_y": 0.51, "speed_mps": 0.1, "confidence": 0.5},
+        ],
+        "bounds": {"min_x": 0.49, "max_x": 0.51, "min_y": 0.49, "max_y": 0.51},
+        "route_confidence": 0.5,
+    }
+    narrow_calib = processor.calibrate_to_floor_plan(narrow_route)
+    assert narrow_calib["alignment_confidence"] < 0.5
+    assert "narrow" in narrow_calib["calibration_hint"].lower()
+
+    good_route = {
+        "waypoints": [
+            {"position_x": 0.2, "position_y": 0.2, "speed_mps": 0.8, "confidence": 0.8},
+            {"position_x": 0.5, "position_y": 0.5, "speed_mps": 0.8, "confidence": 0.8},
+            {"position_x": 0.8, "position_y": 0.8, "speed_mps": 0.8, "confidence": 0.8},
+        ],
+        "bounds": {"min_x": 0.1, "max_x": 0.9, "min_y": 0.1, "max_y": 0.9},
+        "route_confidence": 0.85,
+    }
+    good_calib = processor.calibrate_to_floor_plan(good_route)
+    assert good_calib["alignment_confidence"] > 0.6
+
+
+def test_capture_processing_stores_auto_position_when_waypoints_exist() -> None:
+    reset_demo_store()
+
+    project = client.post("/projects", json={"title": "Calibration Demo"}).json()
+    pin = client.post(
+        f"/projects/{project['id']}/pins",
+        json={
+            "latitude": 5.56,
+            "longitude": -0.24,
+            "heading": 90,
+            "captured_on": "2026-08-20",
+            "telemetry": {
+                "source": "insp_parser",
+                "device": "ONE X2",
+                "route": [
+                    {"time": "2026-08-20T09:15:00Z", "x": 0.0, "y": 0.0, "z": 0.0, "yaw": 30.0, "pitch": 5.0, "roll": 2.0, "speed_mps": 0.45},
+                    {"time": "2026-08-20T09:15:05Z", "x": 1.2, "y": 0.8, "z": 0.1, "yaw": 35.0, "pitch": 6.0, "roll": 1.5, "speed_mps": 0.50},
+                    {"time": "2026-08-20T09:15:10Z", "x": 2.5, "y": 1.6, "z": 0.2, "yaw": 42.0, "pitch": 7.0, "roll": 1.0, "speed_mps": 0.52},
+                ],
+                "motion": {"samples": 3, "average_speed_mps": 0.4917, "max_speed_mps": 0.52},
+                "confidence": 0.72,
+            },
+        },
+    ).json()
+
+    processed = client.post(f"/projects/{project['id']}/pins/{pin['id']}/process")
+    assert processed.status_code == 200
+
+    updated_pin = client.get(f"/projects/{project['id']}/pins/{pin['id']}")
+    assert updated_pin.status_code == 200
+    pin_data = updated_pin.json()
+    
+    assert pin_data["auto_position_x"] is not None
+    assert pin_data["auto_position_y"] is not None
+    assert 0.0 <= pin_data["auto_position_x"] <= 1.0
+    assert 0.0 <= pin_data["auto_position_y"] <= 1.0
+    assert pin_data["alignment_confidence"] > 0.0
+    assert pin_data["alignment_confidence"] <= 1.0
+
+
