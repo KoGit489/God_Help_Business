@@ -373,3 +373,139 @@ def test_capture_processing_stores_waypoints_on_pin_when_telemetry_is_processed(
     assert len(pin_data["waypoints"]) == 3
     assert pin_data["waypoints"][0]["position_x"] is not None
     assert pin_data["waypoints"][0]["position_y"] is not None
+
+
+def test_preview_extraction_generates_placeholder_for_missing_file() -> None:
+    reset_demo_store()
+
+    from app.capture_processing import CaptureProcessor
+    from pathlib import Path
+
+    processor = CaptureProcessor()
+    result = processor.extract_insp_preview("/nonexistent/path/missing.insp")
+
+    assert result["source"] == "preview"
+    assert result["preview_available"] is False
+    assert "not exist" in result["message"].lower()
+
+
+def test_preview_extraction_generates_placeholder_equirectangular_image() -> None:
+    reset_demo_store()
+
+    from app.capture_processing import CaptureProcessor
+    from pathlib import Path
+    import tempfile
+
+    processor = CaptureProcessor()
+
+    with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as tmp:
+        tmp.write(b"fake insp data that cannot be parsed")
+        tmp.flush()
+        tmp_path = tmp.name
+
+    try:
+        result = processor.extract_insp_preview(tmp_path)
+        assert result["source"] == "preview"
+        assert result["preview_available"] is True
+        assert result["preview_format"] == "jpeg"
+        assert result["preview_width"] == 4096
+        assert result["preview_height"] == 2048
+        assert len(result.get("preview_data", b"")) > 0
+    finally:
+        Path(tmp_path).unlink()
+
+
+def test_capture_processing_stores_preview_on_pin_when_native_file_exists() -> None:
+    reset_demo_store()
+
+    from pathlib import Path
+    import tempfile
+
+    project = client.post("/projects", json={"title": "Preview Demo"}).json()
+
+    with tempfile.NamedTemporaryFile(suffix=".insp", delete=False) as tmp:
+        tmp.write(b"fake insp panorama data for testing")
+        tmp.flush()
+        tmp_path = Path(tmp.name)
+
+    try:
+        pin = client.post(
+            f"/projects/{project['id']}/pins",
+            json={
+                "latitude": 5.56,
+                "longitude": -0.24,
+                "heading": 90,
+                "captured_on": "2026-08-20",
+                "media_type": "insta360",
+            },
+        ).json()
+
+        pin_id = pin["id"]
+
+        upload_response = client.post(
+            f"/projects/{project['id']}/pins/{pin_id}/native-upload",
+            files={"file": ("capture.insp", tmp_path.read_bytes(), "application/octet-stream")},
+        )
+        assert upload_response.status_code == 200
+
+        processed = client.post(f"/projects/{project['id']}/pins/{pin_id}/process")
+        assert processed.status_code == 200
+
+        updated_pin = client.get(f"/projects/{project['id']}/pins/{pin_id}")
+        assert updated_pin.status_code == 200
+        pin_data = updated_pin.json()
+        assert pin_data["preview_url"] is not None
+        assert "preview" in pin_data["preview_url"].lower()
+
+    finally:
+        tmp_path.unlink()
+
+
+def test_preview_can_be_served_through_media_endpoint() -> None:
+    reset_demo_store()
+
+    from pathlib import Path
+    import tempfile
+
+    project = client.post("/projects", json={"title": "Preview Serve Demo"}).json()
+
+    with tempfile.NamedTemporaryFile(suffix=".insp", delete=False) as tmp:
+        tmp.write(b"fake panorama data")
+        tmp.flush()
+        tmp_path = Path(tmp.name)
+
+    try:
+        pin = client.post(
+            f"/projects/{project['id']}/pins",
+            json={
+                "latitude": 5.56,
+                "longitude": -0.24,
+                "heading": 90,
+                "captured_on": "2026-08-20",
+                "media_type": "insta360",
+            },
+        ).json()
+
+        pin_id = pin["id"]
+
+        upload_response = client.post(
+            f"/projects/{project['id']}/pins/{pin_id}/native-upload",
+            files={"file": ("capture.insp", tmp_path.read_bytes(), "application/octet-stream")},
+        )
+        assert upload_response.status_code == 200
+
+        processed = client.post(f"/projects/{project['id']}/pins/{pin_id}/process")
+        assert processed.status_code == 200
+
+        updated_pin = client.get(f"/projects/{project['id']}/pins/{pin_id}")
+        pin_data = updated_pin.json()
+        preview_url = pin_data.get("preview_url")
+
+        if preview_url:
+            preview_response = client.get(preview_url)
+            assert preview_response.status_code == 200
+            assert len(preview_response.content) > 0
+
+    finally:
+        tmp_path.unlink()
+

@@ -127,6 +127,7 @@ class PinResponse(BaseModel):
     position_y: float | None = None
     telemetry: dict[str, Any] | None = None
     waypoints: list[dict[str, Any]] | None = None
+    preview_url: str | None = None
     processing_status: str = "not_requested"
     processing_error: str | None = None
     captured_on: str
@@ -343,9 +344,36 @@ def _store_floor_plan(project_id: str, upload: UploadFile) -> str:
     return f"floorplans/{project_id}/{filename}"
 
 
+def _store_preview(project_id: str, pin_id: str, preview_data: bytes) -> str:
+    """Store a generated preview image for a pin."""
+    preview_key = f"previews/{project_id}/{pin_id}/preview.jpg"
+    if STORAGE_BACKEND == "s3":
+        try:
+            import boto3
+        except ImportError as exc:
+            raise HTTPException(status_code=500, detail="boto3 is required for S3 storage backend") from exc
+
+        bucket = os.getenv("S3_BUCKET")
+        if not bucket:
+            raise HTTPException(status_code=500, detail="S3_BUCKET is required for S3 storage backend")
+
+        s3_client = boto3.client("s3", region_name=os.getenv("S3_REGION"), endpoint_url=os.getenv("S3_ENDPOINT_URL"))
+        s3_client.put_object(Bucket=bucket, Key=preview_key, Body=preview_data, ContentType="image/jpeg")
+        return preview_key
+
+    destination = UPLOAD_DIR / "previews" / project_id / pin_id
+    destination.mkdir(parents=True, exist_ok=True)
+    output_file = destination / "preview.jpg"
+    with output_file.open("wb") as handle:
+        handle.write(preview_data)
+
+    return preview_key
+
+
 def _pin_response_from_record(record: PinRecord) -> PinResponse:
     telemetry = json.loads(record.telemetry_json) if record.telemetry_json else None
     waypoints = json.loads(record.waypoints_json) if record.waypoints_json else None
+    preview_url = f"/media/{record.preview_key}" if record.preview_key else None
     return PinResponse(
         id=record.id,
         project_id=record.project_id,
@@ -356,6 +384,7 @@ def _pin_response_from_record(record: PinRecord) -> PinResponse:
         position_y=record.position_y,
         telemetry=telemetry,
         waypoints=waypoints,
+        preview_url=preview_url,
         processing_status=record.processing_status,
         processing_error=record.processing_error,
         captured_on=record.captured_on,
@@ -363,6 +392,30 @@ def _pin_response_from_record(record: PinRecord) -> PinResponse:
         media_type=record.media_type,
         native_file_key=record.native_file_key,
         thumbnail_key=record.thumbnail_key,
+    )
+
+
+def _pin_response_from_memory(pin: dict[str, Any]) -> PinResponse:
+    """Build a PinResponse from an in-memory pin dictionary."""
+    preview_url = f"/media/{pin['preview_key']}" if pin.get('preview_key') else None
+    return PinResponse(
+        id=pin["id"],
+        project_id=pin["project_id"],
+        latitude=pin["latitude"],
+        longitude=pin["longitude"],
+        heading=pin["heading"],
+        position_x=pin["position_x"],
+        position_y=pin["position_y"],
+        telemetry=pin.get("telemetry"),
+        waypoints=pin.get("waypoints"),
+        preview_url=preview_url,
+        processing_status=pin["processing_status"],
+        processing_error=pin["processing_error"],
+        captured_on=pin["captured_on"],
+        photo_key=pin.get("photo_key"),
+        media_type=pin.get("media_type"),
+        native_file_key=pin.get("native_file_key"),
+        thumbnail_key=pin.get("thumbnail_key"),
     )
 
 
@@ -822,6 +875,8 @@ def create_pin(project_id: str, payload: PinCreateRequest, request: Request) -> 
         "position_x": payload.position_x,
         "position_y": payload.position_y,
         "telemetry": payload.telemetry,
+        "waypoints": None,
+        "preview_key": None,
         "processing_status": "metadata_received" if payload.telemetry else "not_requested",
         "processing_error": None,
         "captured_on": payload.captured_on,
@@ -832,7 +887,27 @@ def create_pin(project_id: str, payload: PinCreateRequest, request: Request) -> 
     }
     pins_by_project[project_id].append(pin)
     pins_by_id[pin_id] = pin
-    return PinResponse(**pin)
+    
+    preview_url = f"/media/{pin['preview_key']}" if pin['preview_key'] else None
+    return PinResponse(
+        id=pin["id"],
+        project_id=pin["project_id"],
+        latitude=pin["latitude"],
+        longitude=pin["longitude"],
+        heading=pin["heading"],
+        position_x=pin["position_x"],
+        position_y=pin["position_y"],
+        telemetry=pin["telemetry"],
+        waypoints=pin["waypoints"],
+        preview_url=preview_url,
+        processing_status=pin["processing_status"],
+        processing_error=pin["processing_error"],
+        captured_on=pin["captured_on"],
+        photo_key=pin["photo_key"],
+        media_type=pin["media_type"],
+        native_file_key=pin["native_file_key"],
+        thumbnail_key=pin["thumbnail_key"],
+    )
 
 
 @app.get("/projects/{project_id}/pins", response_model=list[PinResponse], tags=["pins"])
@@ -849,7 +924,7 @@ def list_pins(project_id: str, request: Request) -> list[PinResponse]:
 
     if project_id not in projects:
         raise HTTPException(status_code=404, detail="Project not found")
-    return [PinResponse(**pin) for pin in pins_by_project.get(project_id, [])]
+    return [_pin_response_from_memory(pin) for pin in pins_by_project.get(project_id, [])]
 
 
 @app.get("/projects/{project_id}/pins/{pin_id}", response_model=PinResponse, tags=["pins"])
@@ -875,7 +950,7 @@ def get_pin(project_id: str, pin_id: str, request: Request) -> PinResponse:
     if not pin or pin["project_id"] != project_id:
         raise HTTPException(status_code=404, detail="Pin not found")
 
-    return PinResponse(**pin)
+    return _pin_response_from_memory(pin)
 
 
 @app.post("/projects/{project_id}/pins/{pin_id}/upload", response_model=UploadResponse, tags=["pins"])
@@ -970,6 +1045,15 @@ def process_pin_capture(project_id: str, pin_id: str, request: Request) -> dict[
                 if waypoint_result.get("waypoints"):
                     pin.waypoints_json = json.dumps(waypoint_result)
             
+            if pin.native_file_key and not pin.preview_key:
+                native_key_relative = pin.native_file_key.removeprefix("uploads/")
+                native_file_path = UPLOAD_DIR / native_key_relative
+                if native_file_path.exists():
+                    preview_result = capture_processor.extract_insp_preview(native_file_path)
+                    if preview_result.get("preview_available") and preview_result.get("preview_data"):
+                        preview_key = _store_preview(project_id, pin_id, preview_result["preview_data"])
+                        pin.preview_key = preview_key
+            
             db.commit()
             return result
 
@@ -986,7 +1070,18 @@ def process_pin_capture(project_id: str, pin_id: str, request: Request) -> dict[
         if waypoint_result.get("waypoints"):
             pin["waypoints"] = waypoint_result.get("waypoints", [])
     
+    if pin.get("native_file_key") and not pin.get("preview_key"):
+        native_key_relative = pin["native_file_key"].removeprefix("uploads/")
+        native_file_path = UPLOAD_DIR / native_key_relative
+        if native_file_path.exists():
+            preview_result = capture_processor.extract_insp_preview(native_file_path)
+            if preview_result.get("preview_available") and preview_result.get("preview_data"):
+                preview_key = _store_preview(project_id, pin_id, preview_result["preview_data"])
+                pin["preview_key"] = preview_key
+    
     return result
+
+
 
 
 @app.post("/projects/{project_id}/floor-plan-upload", response_model=FloorPlanUploadResponse, tags=["projects"])

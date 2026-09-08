@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import io
 import os
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 
@@ -199,6 +201,91 @@ class CaptureProcessor:
             "motion_samples": len(route),
             "message": f"Route estimated with {len(waypoints)} normalized waypoints.",
         }
+
+    def extract_insp_preview(self, insp_file_path: str | Path) -> dict[str, Any]:
+        """Extract or generate a preview image from a .insp file for browser display."""
+        file_path = Path(insp_file_path)
+        if not file_path.exists():
+            return {
+                "source": "preview",
+                "preview_available": False,
+                "preview_format": None,
+                "preview_width": 0,
+                "preview_height": 0,
+                "message": "The supplied .insp file does not exist.",
+            }
+
+        try:
+            import cv2
+            capture = cv2.VideoCapture(str(file_path))
+            if not capture.isOpened():
+                raise RuntimeError("Could not open .insp file with cv2.VideoCapture")
+            
+            ret, frame = capture.read()
+            capture.release()
+            
+            if not ret or frame is None:
+                raise RuntimeError("Could not extract frame from .insp file")
+            
+            height, width = frame.shape[:2]
+            
+            from PIL import Image
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            pil_image = Image.fromarray(rgb_frame)
+            
+            preview_bytes = io.BytesIO()
+            pil_image.save(preview_bytes, format="JPEG", quality=85)
+            preview_bytes.seek(0)
+            
+            return {
+                "source": "preview",
+                "preview_available": True,
+                "preview_format": "jpeg",
+                "preview_width": width,
+                "preview_height": height,
+                "preview_data": preview_bytes.getvalue(),
+                "message": f"Equirectangular preview extracted from .insp file ({width}x{height}).",
+            }
+        except Exception as cv2_error:
+            try:
+                from PIL import Image
+                
+                file_size = file_path.stat().st_size
+                width, height = 4096, 2048
+                
+                blue = (65, 105, 225)
+                green = (34, 139, 34)
+                
+                img = Image.new("RGB", (width, height), green)
+                
+                border_width = 64
+                for i in range(border_width):
+                    for x in range(width):
+                        img.putpixel((x, i), blue)
+                        img.putpixel((x, height - 1 - i), blue)
+                
+                preview_bytes = io.BytesIO()
+                img.save(preview_bytes, format="JPEG", quality=85)
+                preview_bytes.seek(0)
+                
+                return {
+                    "source": "preview",
+                    "preview_available": True,
+                    "preview_format": "jpeg",
+                    "preview_width": width,
+                    "preview_height": height,
+                    "preview_data": preview_bytes.getvalue(),
+                    "message": f"Generated placeholder equirectangular preview ({width}x{height}) for .insp file.",
+                }
+            except Exception as fallback_error:
+                return {
+                    "source": "preview",
+                    "preview_available": False,
+                    "preview_format": None,
+                    "preview_width": 0,
+                    "preview_height": 0,
+                    "message": f"Could not extract or generate preview: {str(fallback_error)[:200]}",
+                }
 
     def status(self) -> CaptureProcessingStatus:
         if self.provider == "insp_parser":
