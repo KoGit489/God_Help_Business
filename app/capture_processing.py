@@ -17,7 +17,12 @@ class CaptureProcessingStatus:
 
 
 class CaptureProcessor:
-    """Extension point for .insp parsing, VIO, and future SLAM worker integrations."""
+    """Extension point for Insta360 X6 (.insp/.insv) telemetry parsing, VIO, and future SLAM worker integrations."""
+
+    # Insta360 X6 ships a higher-resolution sensor than the ONE X2 it replaces, so the
+    # generated placeholder preview matches its native 5.7K equirectangular output.
+    DEFAULT_PREVIEW_WIDTH = 5760
+    DEFAULT_PREVIEW_HEIGHT = 2880
 
     def __init__(self) -> None:
         self.provider = os.getenv("CAPTURE_PROCESSOR", "manual").strip().lower()
@@ -29,6 +34,7 @@ class CaptureProcessor:
             return default
 
     def parse_insp_payload(self, payload: bytes | str | None) -> dict[str, Any]:
+        """Parse Insta360 X6 native telemetry metadata (.insp photo or .insv video sidecar XML)."""
         if payload is None:
             return {
                 "source": "insp_parser",
@@ -38,7 +44,7 @@ class CaptureProcessor:
                 "route": [],
                 "motion": {"samples": 0, "average_speed_mps": 0.0, "max_speed_mps": 0.0},
                 "confidence": 0.0,
-                "message": "No .insp payload was supplied.",
+                "message": "No .insp/.insv payload was supplied.",
             }
 
         text = payload.decode("utf-8", errors="ignore") if isinstance(payload, (bytes, bytearray)) else str(payload)
@@ -66,7 +72,7 @@ class CaptureProcessor:
                 "route": [],
                 "motion": {"samples": 0, "average_speed_mps": 0.0, "max_speed_mps": 0.0},
                 "confidence": 0.0,
-                "message": "The payload was not valid XML and could not be parsed as .insp metadata.",
+                "message": "The payload was not valid XML and could not be parsed as .insp/.insv metadata.",
             }
 
         file_type = root.findtext("FileType") or root.findtext("./FileType") or "INSP"
@@ -203,7 +209,7 @@ class CaptureProcessor:
         }
 
     def extract_insp_preview(self, insp_file_path: str | Path) -> dict[str, Any]:
-        """Extract or generate a preview image from a .insp file for browser display."""
+        """Extract or generate a preview image from an Insta360 X6 .insp/.insv file for browser display."""
         file_path = Path(insp_file_path)
         if not file_path.exists():
             return {
@@ -212,20 +218,20 @@ class CaptureProcessor:
                 "preview_format": None,
                 "preview_width": 0,
                 "preview_height": 0,
-                "message": "The supplied .insp file does not exist.",
+                "message": "The supplied .insp/.insv file does not exist.",
             }
 
         try:
             import cv2
             capture = cv2.VideoCapture(str(file_path))
             if not capture.isOpened():
-                raise RuntimeError("Could not open .insp file with cv2.VideoCapture")
+                raise RuntimeError("Could not open .insp/.insv file with cv2.VideoCapture")
             
             ret, frame = capture.read()
             capture.release()
             
             if not ret or frame is None:
-                raise RuntimeError("Could not extract frame from .insp file")
+                raise RuntimeError("Could not extract frame from .insp/.insv file")
             
             height, width = frame.shape[:2]
             
@@ -244,14 +250,14 @@ class CaptureProcessor:
                 "preview_width": width,
                 "preview_height": height,
                 "preview_data": preview_bytes.getvalue(),
-                "message": f"Equirectangular preview extracted from .insp file ({width}x{height}).",
+                "message": f"Equirectangular preview extracted from .insp/.insv file ({width}x{height}).",
             }
         except Exception as cv2_error:
             try:
                 from PIL import Image
                 
                 file_size = file_path.stat().st_size
-                width, height = 4096, 2048
+                width, height = self.DEFAULT_PREVIEW_WIDTH, self.DEFAULT_PREVIEW_HEIGHT
                 
                 blue = (65, 105, 225)
                 green = (34, 139, 34)
@@ -275,7 +281,7 @@ class CaptureProcessor:
                     "preview_width": width,
                     "preview_height": height,
                     "preview_data": preview_bytes.getvalue(),
-                    "message": f"Generated placeholder equirectangular preview ({width}x{height}) for .insp file.",
+                    "message": f"Generated placeholder equirectangular preview ({width}x{height}) for Insta360 X6 .insp/.insv file.",
                 }
             except Exception as fallback_error:
                 return {
@@ -372,7 +378,7 @@ class CaptureProcessor:
                 processor="insp_parser",
                 status="ready",
                 capabilities=("telemetry_ingest", "trajectory_estimation", "floor_plan_alignment"),
-                message="The native .insp parser is active and can normalize captured route telemetry.",
+                message="The native Insta360 X6 .insp/.insv parser is active and can normalize captured route telemetry.",
             )
         if self.provider in {"slam", "vio"}:
             return CaptureProcessingStatus(

@@ -167,6 +167,39 @@ def test_manual_insta360_native_upload_is_supported() -> None:
     assert payload["native_file_key"].endswith("capture.insp")
 
 
+def test_manual_native_upload_supports_insv_extension_for_x6() -> None:
+    reset_demo_store()
+
+    project = client.post(
+        "/projects",
+        json={"title": "X6 Video Upload Site", "description": "360 video workflow"},
+        headers={"X-User-Id": "user-alpha"},
+    ).json()
+
+    pin = client.post(
+        f"/projects/{project['id']}/pins",
+        json={
+            "latitude": 5.6134,
+            "longitude": -0.1821,
+            "heading": 220.0,
+            "captured_on": "2026-08-11",
+            "photo_key": "photos/manual.jpg",
+            "media_type": "insta360",
+        },
+        headers={"X-User-Id": "user-alpha"},
+    ).json()
+
+    upload_response = client.post(
+        f"/projects/{project['id']}/pins/{pin['id']}/native-upload",
+        files={"file": ("capture.insv", b"fake-insta360-x6-video-file", "application/octet-stream")},
+        headers={"X-User-Id": "user-alpha"},
+    )
+
+    assert upload_response.status_code == 200
+    payload = upload_response.json()
+    assert payload["native_file_key"].endswith("capture.insv")
+
+
 def test_camera_status_exposes_browser_ready_mode() -> None:
     reset_demo_store()
 
@@ -279,7 +312,7 @@ def test_insp_parser_extracts_timestamped_route_and_motion_metrics() -> None:
     sample = b"""
     <Insta360>
       <FileType>INSP</FileType>
-      <Device>ONE X2</Device>
+      <Device>X6</Device>
       <Session>
         <StartTime>2026-08-20T09:15:00Z</StartTime>
         <Track>
@@ -293,7 +326,7 @@ def test_insp_parser_extracts_timestamped_route_and_motion_metrics() -> None:
 
     telemetry = CaptureProcessor().parse_insp_payload(sample)
     assert telemetry["source"] == "insp_parser"
-    assert telemetry["device"] == "ONE X2"
+    assert telemetry["device"] == "X6"
     assert len(telemetry["route"]) == 3
     assert telemetry["route"][0]["time"] == "2026-08-20T09:15:00Z"
     assert telemetry["motion"]["average_speed_mps"] > 0
@@ -307,7 +340,7 @@ def test_route_estimator_normalizes_telemetry_into_floorplan_waypoints() -> None
 
     sample_telemetry = {
         "source": "insp_parser",
-        "device": "ONE X2",
+        "device": "X6",
         "file_type": "INSP",
         "start_time": "2026-08-20T09:15:00Z",
         "route": [
@@ -350,7 +383,7 @@ def test_capture_processing_stores_waypoints_on_pin_when_telemetry_is_processed(
             "captured_on": "2026-08-20",
             "telemetry": {
                 "source": "insp_parser",
-                "device": "ONE X2",
+                "device": "X6",
                 "route": [
                     {"time": "2026-08-20T09:15:00Z", "x": 0.0, "y": 0.0, "z": 0.0, "yaw": 30.0, "pitch": 5.0, "roll": 2.0, "speed_mps": 0.45},
                     {"time": "2026-08-20T09:15:05Z", "x": 1.2, "y": 0.8, "z": 0.1, "yaw": 35.0, "pitch": 6.0, "roll": 1.5, "speed_mps": 0.50},
@@ -408,8 +441,8 @@ def test_preview_extraction_generates_placeholder_equirectangular_image() -> Non
         assert result["source"] == "preview"
         assert result["preview_available"] is True
         assert result["preview_format"] == "jpeg"
-        assert result["preview_width"] == 4096
-        assert result["preview_height"] == 2048
+        assert result["preview_width"] == 5760
+        assert result["preview_height"] == 2880
         assert len(result.get("preview_data", b"")) > 0
     finally:
         Path(tmp_path).unlink()
@@ -620,7 +653,7 @@ def test_capture_processing_stores_auto_position_when_waypoints_exist() -> None:
             "captured_on": "2026-08-20",
             "telemetry": {
                 "source": "insp_parser",
-                "device": "ONE X2",
+                "device": "X6",
                 "route": [
                     {"time": "2026-08-20T09:15:00Z", "x": 0.0, "y": 0.0, "z": 0.0, "yaw": 30.0, "pitch": 5.0, "roll": 2.0, "speed_mps": 0.45},
                     {"time": "2026-08-20T09:15:05Z", "x": 1.2, "y": 0.8, "z": 0.1, "yaw": 35.0, "pitch": 6.0, "roll": 1.5, "speed_mps": 0.50},

@@ -272,7 +272,7 @@ The current Python starter in [app/main.py](app/main.py) should become the backe
 
 ### Phase 6 — Spatial intelligence
 
-- Read telemetry from supported camera files such as Insta360 `.insp`
+- Read telemetry from supported camera files such as Insta360 X6 `.insp`/`.insv`
 - Generate equirectangular preview images for browser viewing
 - Fuse timestamps, GPS, gyroscope, accelerometer, and camera orientation data
 - Use visual-inertial odometry and SLAM to estimate capture positions and route confidence

@@ -49,7 +49,7 @@ function setMessage(text) {
 function renderNativeUploadPreview(file) {
   if (!file) {
     nativePathLabel.textContent = 'No native file selected';
-    nativePreviewBody.innerHTML = '<div class="native-placeholder">Upload an Insta360 ONE X2 file or image to preview it here without blocking the browser testing flow.</div>';
+    nativePreviewBody.innerHTML = '<div class="native-placeholder">Upload an Insta360 X6 file or image to preview it here without blocking the browser testing flow.</div>';
     nativeStatusPill.textContent = 'Native file: optional';
     return;
   }
@@ -57,7 +57,7 @@ function renderNativeUploadPreview(file) {
   nativeStatusPill.textContent = 'Native file: saved';
 
   nativePathLabel.textContent = file.name;
-  const isInsta360Native = /\.insp$/i.test(file.name) || /octet-stream|zip/i.test(file.type || '');
+  const isInsta360Native = /\.(insp|insv)$/i.test(file.name) || /octet-stream|zip/i.test(file.type || '');
   const isImage = file.type.startsWith('image/');
 
   if (isImage) {
@@ -72,7 +72,7 @@ function renderNativeUploadPreview(file) {
   if (isInsta360Native) {
     nativePreviewBody.innerHTML = `
       <div class="native-placeholder">
-        Native Insta360 ONE X2 file preserved for upload.<br />
+        Native Insta360 X6 file preserved for upload.<br />
         <strong>${file.name}</strong><br />
         Browser testing remains available while the original capture is kept intact.
       </div>

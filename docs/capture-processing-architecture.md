@@ -20,7 +20,7 @@ $env:CAPTURE_PROCESSOR="insp_parser"
 
 Supported reserved names are:
 
-- `insp_parser` for reading native Insta360 metadata
+- `insp_parser` for reading native Insta360 X6 metadata (`.insp` photo/telemetry or `.insv` video sidecar)
 - `vio` for visual-inertial odometry using camera motion sensors
 - `slam` for trajectory and map estimation
 
@@ -28,7 +28,7 @@ These names currently report `not_configured`. A worker can later implement the 
 
 ## What the future worker must provide
 
-1. Read `.insp` or an exported telemetry stream.
+1. Read `.insp`/`.insv` (Insta360 X6) or an exported telemetry stream.
 2. Normalize timestamps, GPS, gyro, accelerometer, and camera orientation.
 3. Estimate a route and confidence score.
 4. Convert the route into calibrated floor-plan coordinates.
