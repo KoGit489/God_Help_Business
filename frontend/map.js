@@ -103,7 +103,9 @@ async function loadCameraStatus() {
 
 function updateHeadingReadout(value) {
   const heading = Number(value) || 0;
-  headingReadout.value = `${heading}°`;
+  const cardinals = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+  const cardinal = cardinals[Math.round(heading / 45) % 8];
+  headingReadout.value = `${heading}\u00B0 ${cardinal}`;
   mapDot.style.transform = `translate(-50%, -50%) rotate(${heading}deg)`;
 }
 

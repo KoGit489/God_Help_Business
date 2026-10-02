@@ -19,7 +19,7 @@
       .plan-empty { min-height: 400px; display: grid; place-items: center; text-align: center; color: var(--muted); font-size: 1rem; padding: 2rem; }
       #waypoint-layer { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
       .waypoint { position: absolute; width: 28px; height: 28px; transform: translate(-50%, -50%); border: 3px solid white; border-radius: 50%; background: var(--gold-dark); box-shadow: 0 3px 10px rgba(20, 23, 26, 0.35); cursor: pointer; z-index: 3; pointer-events: auto; }
-      .waypoint.current { width: 34px; height: 34px; background: var(--ink); animation: pulse 1.5s infinite; }
+      .waypoint.current { width: 17px; height: 17px; background: var(--ink); animation: pulse 1.5s infinite; }
       .waypoint::after { content: attr(data-label); position: absolute; left: 18px; top: 24px; white-space: nowrap; color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 0.2rem 0.35rem; font-size: 0.72rem; font-weight: 700; }
       @keyframes pulse { 50% { box-shadow: 0 0 0 8px rgba(20, 23, 26, 0.14); } }
       .readout { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.45rem; }

@@ -205,14 +205,18 @@ async function selectProject(projectId) {
 
 function enableSensors() {
   if (!window.DeviceOrientationEvent) { byId('telemetry-status').textContent = 'This browser does not provide device heading sensors.'; return; }
-  window.addEventListener('deviceorientationabsolute', (event) => { if (typeof event.alpha === 'number') { state.heading = event.alpha; byId('heading').value = String(Math.round(state.heading)); byId('heading-value').textContent = `${Math.round(state.heading)}°`; } }, true);
+  window.addEventListener('deviceorientationabsolute', (event) => { if (typeof event.alpha === 'number') { state.heading = event.alpha; byId('heading').value = String(Math.round(state.heading)); byId('heading-value').textContent = headingLabel(state.heading); } }, true);
   byId('telemetry-status').textContent = 'Device heading enabled when supported by the browser.';
 }
 
 byId('project-select').addEventListener('change', (event) => selectProject(event.target.value));
 byId('floor-plan-file').addEventListener('change', (event) => uploadPlan(event.target.files[0]));
 byId('plan-wrap').addEventListener('click', handlePlanClick);
-byId('heading').addEventListener('input', (event) => { state.heading = Number(event.target.value); byId('heading-value').textContent = `${state.heading}°`; });
+function headingLabel(degrees) {
+  const cardinals = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+  return `${Math.round(degrees)}° ${cardinals[Math.round(degrees / 45) % 8]}`;
+}
+byId('heading').addEventListener('input', (event) => { state.heading = Number(event.target.value); byId('heading-value').textContent = headingLabel(state.heading); });
 byId('walk-step').addEventListener('click', stepRoute);
 byId('save-waypoint').addEventListener('click', saveWaypoint);
 byId('add-annotation').addEventListener('click', () => { if (!state.project) return; state.annotationMode = true; state.calibrationPin = null; setStatus('Click the note location on the floor plan.'); });
