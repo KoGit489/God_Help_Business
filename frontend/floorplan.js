@@ -58,7 +58,7 @@ function renderWaypoints() {
     dot.type = 'button'; dot.className = 'waypoint'; dot.dataset.label = `#${index + 1}`;
     dot.style.left = `${pin.position_x * 100}%`; dot.style.top = `${pin.position_y * 100}%`;
     dot.title = `Open capture ${index + 1}`;
-    dot.addEventListener('click', (event) => { event.stopPropagation(); openCapture(pin, index + 1); });
+    dot.addEventListener('click', (event) => { event.stopPropagation(); event.preventDefault(); openCapture(pin, index + 1); });
     layer.appendChild(dot);
   });
   if (state.current && !state.current.saved) {
