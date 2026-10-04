@@ -101,6 +101,12 @@
             <h2>Saved waypoints</h2>
             <ul id="waypoint-list" class="waypoint-list"><li class="small">No waypoints yet.</li></ul>
           </section>
+          <section class="panel stack" id="edit-panel" style="display:none;">
+            <h2>Edit waypoint <span id="edit-waypoint-label"></span></h2>
+            <label>Replace photo<input id="edit-photo-file" type="file" accept="image/*" /></label>
+            <button id="apply-edit" class="secondary" type="button">Save changes</button>
+            <button id="cancel-edit" class="quiet" type="button">Cancel</button>
+          </section>
           <section class="panel stack">
             <h2>Calibration review</h2>
             <p class="small">Auto-placed captures remain editable. Choose a pin, then click its verified location on the drawing.</p>
@@ -121,6 +127,6 @@
       <div class="viewer"><div class="viewer-head"><span id="viewer-title">Capture</span><button id="close-viewer" class="quiet" type="button">Close</button></div><div id="panorama"></div><img id="plain-preview" alt="Capture preview" /></div>
     </div>
     <script src="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.js"></script>
-    <script src="floorplan.js"></script>
+    <script src="floorplan.js?v=2"></script>
   </body>
 </html>

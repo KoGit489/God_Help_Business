@@ -9,7 +9,7 @@ function buildApiBases() {
 }
 
 const apiBases = buildApiBases();
-const state = { project: null, plan: null, start: null, current: null, distance: 0, heading: 0, viewer: null, timer: null, calibrationPin: null, annotationMode: false, annotations: [] };
+const state = { project: null, plan: null, start: null, current: null, distance: 0, heading: 0, viewer: null, timer: null, calibrationPin: null, annotationMode: false, annotations: [], editingPin: null };
 const byId = (id) => document.getElementById(id);
 
 function setStatus(text) { byId('plan-status').textContent = text; }
@@ -71,8 +71,59 @@ function renderWaypoints() {
     current.style.left = `${state.current.x * 100}%`; current.style.top = `${state.current.y * 100}%`; layer.appendChild(current);
   }
   byId('waypoint-count').textContent = String((state.project?.pins || []).filter((pin) => pin.position_x != null).length);
+  renderWaypointList();
   renderCalibrationList();
   renderAnnotationList();
+}
+
+function renderWaypointList() {
+  const list = byId('waypoint-list'); if (!list) return;
+  const pins = state.project?.pins || [];
+  if (!pins.length) { list.innerHTML = '<li class="small">No waypoints yet.</li>'; return; }
+  list.innerHTML = '';
+  pins.forEach((pin, index) => {
+    const item = document.createElement('li');
+    const hasMedia = Boolean(pin.photo_key || pin.preview_url || pin.native_file_key);
+    item.innerHTML = `<strong>#${index + 1}</strong> · ${Math.round((pin.position_x || 0) * 100)}%, ${Math.round((pin.position_y || 0) * 100)}% ${hasMedia ? '📷' : ''}`;
+    const open = document.createElement('button'); open.type = 'button'; open.textContent = 'View';
+    open.addEventListener('click', () => openCapture(pin, index + 1));
+    const edit = document.createElement('button'); edit.type = 'button'; edit.textContent = 'Edit';
+    edit.addEventListener('click', () => startEdit(pin, index));
+    const del = document.createElement('button'); del.type = 'button'; del.textContent = 'Delete'; del.style.color = 'var(--danger)';
+    del.addEventListener('click', () => deleteWaypoint(pin, index));
+    item.append(open, edit, del); list.appendChild(item);
+  });
+}
+
+function startEdit(pin, index) {
+  state.editingPin = pin;
+  byId('edit-panel').style.display = 'grid';
+  byId('edit-waypoint-label').textContent = `#${index + 1}`;
+  byId('edit-photo-file').value = '';
+}
+
+async function applyEdit() {
+  const pin = state.editingPin; if (!pin) return;
+  const photo = byId('edit-photo-file').files[0];
+  setStatus('Saving changes...');
+  try {
+    if (photo) { const form = new FormData(); form.append('file', photo); await apiRequest(`/projects/${state.project.id}/pins/${pin.id}/upload`, { method: 'POST', body: form }); }
+    const refreshed = await apiRequest(`/projects/${state.project.id}/pins/${pin.id}`);
+    Object.assign(pin, refreshed);
+    state.editingPin = null; byId('edit-panel').style.display = 'none'; renderWaypoints();
+    setStatus('Waypoint updated.');
+  } catch (error) { setStatus(`Edit failed: ${error.message}`); }
+}
+
+async function deleteWaypoint(pin, index) {
+  if (!confirm(`Delete waypoint #${index + 1}? This removes the pin and its capture.`)) return;
+  setStatus(`Deleting waypoint #${index + 1}...`);
+  try {
+    await apiRequest(`/projects/${state.project.id}/pins/${pin.id}`, { method: 'DELETE' });
+    state.project.pins = state.project.pins.filter((p) => p.id !== pin.id);
+    state.editingPin = null; byId('edit-panel').style.display = 'none'; renderWaypoints();
+    setStatus(`Waypoint #${index + 1} deleted.`);
+  } catch (error) { setStatus(`Delete failed: ${error.message}`); }
 }
 
 function renderAnnotationList() {
@@ -238,4 +289,6 @@ byId('update-mode').addEventListener('change', (event) => {
 byId('enable-sensors').addEventListener('click', enableSensors);
 byId('set-gps').addEventListener('click', () => { if (!navigator.geolocation) { byId('telemetry-status').textContent = 'GPS is not available in this browser.'; return; } navigator.geolocation.getCurrentPosition(() => { byId('telemetry-status').textContent = 'GPS is available. Click the plan to calibrate its matching starting point.'; }, () => { byId('telemetry-status').textContent = 'GPS permission was unavailable; the calibrated demo route is still ready.'; }); });
 byId('close-viewer').addEventListener('click', () => { byId('viewer-modal').classList.remove('open'); if (state.viewer) { state.viewer.destroy(); state.viewer = null; } });
+byId('apply-edit').addEventListener('click', applyEdit);
+byId('cancel-edit').addEventListener('click', () => { state.editingPin = null; byId('edit-panel').style.display = 'none'; });
 loadProjects();

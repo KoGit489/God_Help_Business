@@ -1137,6 +1137,50 @@ def get_pin(project_id: str, pin_id: str, request: Request) -> PinResponse:
     return _pin_response_from_memory(pin)
 
 
+@app.delete("/projects/{project_id}/pins/{pin_id}", tags=["pins"])
+def delete_pin(project_id: str, pin_id: str, request: Request) -> dict[str, object]:
+    """Remove a waypoint and its capture from a project."""
+    _ensure_project_ownership(project_id, _get_user_id(request))
+    if PERSISTENCE_MODE == "database":
+        with SessionLocal() as db:
+            pin = db.get(PinRecord, pin_id)
+            if not pin or pin.project_id != project_id:
+                raise HTTPException(status_code=404, detail="Pin not found")
+            db.delete(pin)
+            db.commit()
+            return {"deleted": True, "id": pin_id}
+
+    pin = pins_by_id.get(pin_id)
+    if not pin or pin["project_id"] != project_id:
+        raise HTTPException(status_code=404, detail="Pin not found")
+    pins_by_project[project_id] = [p for p in pins_by_project.get(project_id, []) if p["id"] != pin_id]
+    pins_by_id.pop(pin_id, None)
+    return {"deleted": True, "id": pin_id}
+
+
+@app.patch("/projects/{project_id}/pins/{pin_id}", response_model=PinResponse, tags=["pins"])
+def update_pin(project_id: str, pin_id: str, request: Request, payload: dict[str, Any]) -> PinResponse:
+    """Update a pin's photo or heading."""
+    _ensure_project_ownership(project_id, _get_user_id(request))
+    if PERSISTENCE_MODE == "database":
+        with SessionLocal() as db:
+            pin = db.get(PinRecord, pin_id)
+            if not pin or pin.project_id != project_id:
+                raise HTTPException(status_code=404, detail="Pin not found")
+            if "heading" in payload:
+                pin.heading = float(payload["heading"])
+            db.commit()
+            db.refresh(pin)
+            return _pin_response_from_record(pin)
+
+    pin = pins_by_id.get(pin_id)
+    if not pin or pin["project_id"] != project_id:
+        raise HTTPException(status_code=404, detail="Pin not found")
+    if "heading" in payload:
+        pin["heading"] = float(payload["heading"])
+    return _pin_response_from_memory(pin)
+
+
 @app.post("/projects/{project_id}/pins/{pin_id}/upload", response_model=UploadResponse, tags=["pins"])
 def upload_pin_photo(project_id: str, pin_id: str, request: Request, file: UploadFile = File(...)) -> UploadResponse:
     if file.filename is None:

@@ -736,7 +736,41 @@ def test_manual_calibration_rejects_coordinates_outside_floor_plan() -> None:
     assert response.status_code == 422
 
 
-def test_annotations_can_be_created_linked_to_a_pin_and_listed() -> None:
+def test_delete_pin_removes_waypoint() -> None:
+    reset_demo_store()
+
+    project = client.post("/projects", json={"title": "Delete Demo"}).json()
+    pin = client.post(
+        f"/projects/{project['id']}/pins",
+        json={"latitude": 5.56, "longitude": -0.24, "heading": 90, "position_x": 0.5, "position_y": 0.5, "captured_on": "2026-08-20"},
+    ).json()
+
+    delete_response = client.delete(f"/projects/{project['id']}/pins/{pin['id']}")
+    assert delete_response.status_code == 200
+    assert delete_response.json()["deleted"] is True
+
+    get_response = client.get(f"/projects/{project['id']}/pins/{pin['id']}")
+    assert get_response.status_code == 404
+
+
+def test_update_pin_heading() -> None:
+    reset_demo_store()
+
+    project = client.post("/projects", json={"title": "Edit Demo"}).json()
+    pin = client.post(
+        f"/projects/{project['id']}/pins",
+        json={"latitude": 5.56, "longitude": -0.24, "heading": 90, "captured_on": "2026-08-20"},
+    ).json()
+
+    update_response = client.patch(
+        f"/projects/{project['id']}/pins/{pin['id']}",
+        json={"heading": 180},
+    )
+    assert update_response.status_code == 200
+    assert update_response.json()["heading"] == 180.0
+
+    fetched = client.get(f"/projects/{project['id']}/pins/{pin['id']}").json()
+    assert fetched["heading"] == 180.0
     reset_demo_store()
 
     project = client.post("/projects", json={"title": "Markup Review"}).json()
