@@ -180,11 +180,11 @@ async function saveWaypoint() {
   } catch (error) { setStatus(`Waypoint save failed: ${error.message}`); }
 }
 
-function mediaUrl(key) { return key ? `${apiBases[0]}/media/${key}` : null; }
+function mediaUrl(key) { return key ? `/media/${key}` : null; }
 function openCapture(pin, number) {
   byId('viewer-title').textContent = `Capture #${number} · heading ${pin.heading || 0}°`;
   byId('viewer-modal').classList.add('open');
-  const imageUrl = mediaUrl(pin.photo_key || pin.thumbnail_key) || (pin.preview_url ? `${apiBases[0]}${pin.preview_url}` : null);
+  const imageUrl = mediaUrl(pin.photo_key || pin.thumbnail_key) || (pin.preview_url || null);
   byId('plain-preview').style.display = 'none'; byId('panorama').style.display = 'block';
   if (state.viewer) { state.viewer.destroy(); state.viewer = null; }
   if (imageUrl && window.pannellum && pin.media_type === 'insta360') state.viewer = pannellum.viewer('panorama', { type: 'equirectangular', panorama: imageUrl, autoLoad: true, yaw: pin.heading || 0 });
