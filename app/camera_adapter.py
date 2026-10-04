@@ -24,11 +24,12 @@ class CameraAdapterStatus:
 
 
 class Insta360CameraAdapter:
-    """Thin adapter layer for the Insta360 ONE X2 capture flow.
+    """Thin adapter layer for the Insta360 X6 capture flow.
 
     The app keeps the browser workflow as the default and makes any direct SDK
     integration opt-in via environment configuration. This avoids blocking web-based
-    testing while leaving a clean extension point for future SDK use.
+    testing while leaving a clean extension point for future SDK use. Native
+    captures may arrive as `.insp` (photo/telemetry) or `.insv` (video) files.
     """
 
     def __init__(self, mode: str | None = None):
@@ -90,7 +91,7 @@ class Insta360CameraAdapter:
                 manual_upload_supported=True,
                 real_time_feed_supported=False,
                 integration_ready=False,
-                recommended_action="Keep the browser workflow active. Native app support is optional and should not block the ONE X2 testing path.",
+                recommended_action="Keep the browser workflow active. Native app support is optional and should not block the Insta360 X6 testing path.",
                 reason="Native app support is enabled, but direct SDK access is not configured.",
             )
 
@@ -105,7 +106,7 @@ class Insta360CameraAdapter:
             manual_upload_supported=True,
             real_time_feed_supported=False,
             integration_ready=False,
-            recommended_action="Use the browser upload flow for now and preserve the original .insp capture for downstream processing.",
+            recommended_action="Use the browser upload flow for now and preserve the original .insp/.insv capture for downstream processing.",
             reason="Browser-first upload mode is active; direct SDK integration is not required for testing.",
         )
 

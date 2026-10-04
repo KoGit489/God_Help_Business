@@ -1,6 +1,6 @@
 # Browser Testing Setup Guide
 
-This app is built to work in a browser. You do not need the Insta360 app to test the basic flow. The same app can be opened on a PC browser and on the Insta360 ONE X2 browser as long as both devices are on the same Wi‑Fi.
+This app is built to work in a browser. You do not need the Insta360 app to test the basic flow. The same app can be opened on a PC browser and on the Insta360 X6 browser as long as both devices are on the same Wi‑Fi.
 
 ## 1) Install Python
 
@@ -70,9 +70,9 @@ http://127.0.0.1:8000/index.html
 
 This is the main app page.
 
-## 7) Open it on the Insta360 ONE X2 browser
+## 7) Open it on the Insta360 X6 browser
 
-On the ONE X2, connect it to the same Wi‑Fi as the PC.
+On the X6, connect it to the same Wi‑Fi as the PC.
 
 Then find your PC's local IP address:
 
@@ -86,7 +86,7 @@ Look for something like:
 IPv4 Address . . . . . . . . : 192.168.1.20
 ```
 
-Now open the ONE X2 browser and go to:
+Now open the X6 browser and go to:
 
 ```text
 http://192.168.1.20:8000/index.html
@@ -103,7 +103,7 @@ Try these steps:
 3. Add a sample pin.
 4. Open the capture map page.
 5. Add a location and heading.
-6. Upload a photo or native Insta360 file if you have one.
+6. Upload a photo or native Insta360 X6 file (`.insp` or `.insv`) if you have one.
 7. Open the review page.
 8. Create a share link.
 
@@ -127,6 +127,6 @@ If you want the short version:
 4. Run `pip install -r requirements.txt`.
 5. Start Uvicorn on port 8000.
 6. Open `http://127.0.0.1:8000/index.html` on the PC.
-7. Open `http://<PC-IP>:8000/index.html` on the ONE X2.
+7. Open `http://<PC-IP>:8000/index.html` on the X6.
 
 This is the browser-first test route for this app.

@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.camera_adapter import Insta360CameraAdapter
 from app.capture_processing import CaptureProcessor
-from app.models import Base, PinRecord, ProjectRecord, ShareLinkRecord
+from app.models import AnnotationRecord, Base, PinRecord, ProjectRecord, ShareLinkRecord
 
 load_dotenv()
 
@@ -117,6 +117,12 @@ class PinCreateRequest(BaseModel):
     thumbnail_key: str | None = None
 
 
+class PinCalibrationRequest(BaseModel):
+    position_x: float = Field(ge=0, le=1)
+    position_y: float = Field(ge=0, le=1)
+    note: str | None = Field(default=None, max_length=500)
+
+
 class PinResponse(BaseModel):
     id: str
     project_id: str
@@ -125,7 +131,14 @@ class PinResponse(BaseModel):
     heading: float
     position_x: float | None = None
     position_y: float | None = None
+    auto_position_x: float | None = None
+    auto_position_y: float | None = None
+    alignment_confidence: float = 0.0
+    calibration_state: str = "unreviewed"
+    calibration_data: dict[str, Any] | None = None
     telemetry: dict[str, Any] | None = None
+    waypoints: list[dict[str, Any]] | None = None
+    preview_url: str | None = None
     processing_status: str = "not_requested"
     processing_error: str | None = None
     captured_on: str
@@ -133,6 +146,27 @@ class PinResponse(BaseModel):
     media_type: str | None = None
     native_file_key: str | None = None
     thumbnail_key: str | None = None
+
+
+class AnnotationCreateRequest(BaseModel):
+    body: str = Field(min_length=1, max_length=1000)
+    floor_plan_x: float = Field(ge=0, le=1)
+    floor_plan_y: float = Field(ge=0, le=1)
+    pin_id: str | None = None
+    status: str = Field(default="open", pattern="^(open|in_progress|resolved)$")
+    assigned_to: str | None = Field(default=None, max_length=128)
+
+
+class AnnotationResponse(BaseModel):
+    id: str
+    project_id: str
+    pin_id: str | None = None
+    author_id: str
+    body: str
+    status: str
+    assigned_to: str | None = None
+    floor_plan_x: float
+    floor_plan_y: float
 
 
 class ProjectDetailResponse(BaseModel):
@@ -190,6 +224,8 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 projects: dict[str, dict[str, Any]] = {}
 pins_by_project: dict[str, list[dict[str, Any]]] = {}
 pins_by_id: dict[str, dict[str, Any]] = {}
+annotations_by_project: dict[str, list[dict[str, Any]]] = {}
+annotations_by_id: dict[str, dict[str, Any]] = {}
 project_share_tokens: dict[str, str] = {}
 share_token_to_project: dict[str, str] = {}
 
@@ -251,12 +287,15 @@ def reset_demo_store() -> None:
     projects.clear()
     pins_by_project.clear()
     pins_by_id.clear()
+    annotations_by_project.clear()
+    annotations_by_id.clear()
     project_share_tokens.clear()
     share_token_to_project.clear()
 
     if PERSISTENCE_MODE == "database":
         with SessionLocal() as db:
             db.query(ShareLinkRecord).delete()
+            db.query(AnnotationRecord).delete()
             db.query(PinRecord).delete()
             db.query(ProjectRecord).delete()
             db.commit()
@@ -342,8 +381,37 @@ def _store_floor_plan(project_id: str, upload: UploadFile) -> str:
     return f"floorplans/{project_id}/{filename}"
 
 
+def _store_preview(project_id: str, pin_id: str, preview_data: bytes) -> str:
+    """Store a generated preview image for a pin."""
+    preview_key = f"previews/{project_id}/{pin_id}/preview.jpg"
+    if STORAGE_BACKEND == "s3":
+        try:
+            import boto3
+        except ImportError as exc:
+            raise HTTPException(status_code=500, detail="boto3 is required for S3 storage backend") from exc
+
+        bucket = os.getenv("S3_BUCKET")
+        if not bucket:
+            raise HTTPException(status_code=500, detail="S3_BUCKET is required for S3 storage backend")
+
+        s3_client = boto3.client("s3", region_name=os.getenv("S3_REGION"), endpoint_url=os.getenv("S3_ENDPOINT_URL"))
+        s3_client.put_object(Bucket=bucket, Key=preview_key, Body=preview_data, ContentType="image/jpeg")
+        return preview_key
+
+    destination = UPLOAD_DIR / "previews" / project_id / pin_id
+    destination.mkdir(parents=True, exist_ok=True)
+    output_file = destination / "preview.jpg"
+    with output_file.open("wb") as handle:
+        handle.write(preview_data)
+
+    return preview_key
+
+
 def _pin_response_from_record(record: PinRecord) -> PinResponse:
     telemetry = json.loads(record.telemetry_json) if record.telemetry_json else None
+    waypoints = json.loads(record.waypoints_json) if record.waypoints_json else None
+    calibration_data = json.loads(record.calibration_json) if record.calibration_json else None
+    preview_url = f"/media/{record.preview_key}" if record.preview_key else None
     return PinResponse(
         id=record.id,
         project_id=record.project_id,
@@ -352,7 +420,14 @@ def _pin_response_from_record(record: PinRecord) -> PinResponse:
         heading=record.heading,
         position_x=record.position_x,
         position_y=record.position_y,
+        auto_position_x=record.auto_position_x,
+        auto_position_y=record.auto_position_y,
+        alignment_confidence=record.alignment_confidence,
+        calibration_state=(calibration_data or {}).get("state", "unreviewed"),
+        calibration_data=calibration_data,
         telemetry=telemetry,
+        waypoints=waypoints,
+        preview_url=preview_url,
         processing_status=record.processing_status,
         processing_error=record.processing_error,
         captured_on=record.captured_on,
@@ -361,6 +436,53 @@ def _pin_response_from_record(record: PinRecord) -> PinResponse:
         native_file_key=record.native_file_key,
         thumbnail_key=record.thumbnail_key,
     )
+
+
+def _pin_response_from_memory(pin: dict[str, Any]) -> PinResponse:
+    """Build a PinResponse from an in-memory pin dictionary."""
+    preview_url = f"/media/{pin['preview_key']}" if pin.get('preview_key') else None
+    return PinResponse(
+        id=pin["id"],
+        project_id=pin["project_id"],
+        latitude=pin["latitude"],
+        longitude=pin["longitude"],
+        heading=pin["heading"],
+        position_x=pin["position_x"],
+        position_y=pin["position_y"],
+        auto_position_x=pin.get("auto_position_x"),
+        auto_position_y=pin.get("auto_position_y"),
+        alignment_confidence=pin.get("alignment_confidence", 0.0),
+        calibration_state=pin.get("calibration_state", "unreviewed"),
+        calibration_data=pin.get("calibration_data"),
+        telemetry=pin.get("telemetry"),
+        waypoints=pin.get("waypoints"),
+        preview_url=preview_url,
+        processing_status=pin["processing_status"],
+        processing_error=pin["processing_error"],
+        captured_on=pin["captured_on"],
+        photo_key=pin.get("photo_key"),
+        media_type=pin.get("media_type"),
+        native_file_key=pin.get("native_file_key"),
+        thumbnail_key=pin.get("thumbnail_key"),
+    )
+
+
+def _annotation_response_from_record(record: AnnotationRecord) -> AnnotationResponse:
+    return AnnotationResponse(
+        id=record.id,
+        project_id=record.project_id,
+        pin_id=record.pin_id,
+        author_id=record.author_id,
+        body=record.body,
+        status=record.status,
+        assigned_to=record.assigned_to,
+        floor_plan_x=record.floor_plan_x,
+        floor_plan_y=record.floor_plan_y,
+    )
+
+
+def _annotation_response_from_memory(annotation: dict[str, Any]) -> AnnotationResponse:
+    return AnnotationResponse(**annotation)
 
 
 def _project_response_from_record(db: Session, record: ProjectRecord) -> ProjectResponse:
@@ -776,6 +898,72 @@ def open_shared_project(share_token: str) -> ProjectDetailResponse:
     return _build_project_detail_memory(project_id)
 
 
+@app.post("/projects/{project_id}/annotations", response_model=AnnotationResponse, status_code=201, tags=["annotations"])
+def create_annotation(project_id: str, payload: AnnotationCreateRequest, request: Request) -> AnnotationResponse:
+    user_id = _get_user_id(request)
+    _ensure_project_ownership(project_id, user_id)
+    annotation_id = str(uuid4())
+
+    if PERSISTENCE_MODE == "database":
+        with SessionLocal() as db:
+            if not db.get(ProjectRecord, project_id):
+                raise HTTPException(status_code=404, detail="Project not found")
+            if payload.pin_id:
+                pin = db.get(PinRecord, payload.pin_id)
+                if not pin or pin.project_id != project_id:
+                    raise HTTPException(status_code=404, detail="Pin not found in project")
+            annotation = AnnotationRecord(
+                id=annotation_id,
+                project_id=project_id,
+                pin_id=payload.pin_id,
+                author_id=user_id,
+                body=payload.body,
+                status=payload.status,
+                assigned_to=payload.assigned_to,
+                floor_plan_x=payload.floor_plan_x,
+                floor_plan_y=payload.floor_plan_y,
+            )
+            db.add(annotation)
+            db.commit()
+            db.refresh(annotation)
+            return _annotation_response_from_record(annotation)
+
+    if project_id not in projects:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if payload.pin_id:
+        pin = pins_by_id.get(payload.pin_id)
+        if not pin or pin["project_id"] != project_id:
+            raise HTTPException(status_code=404, detail="Pin not found in project")
+    annotation = {
+        "id": annotation_id,
+        "project_id": project_id,
+        "pin_id": payload.pin_id,
+        "author_id": user_id,
+        "body": payload.body,
+        "status": payload.status,
+        "assigned_to": payload.assigned_to,
+        "floor_plan_x": payload.floor_plan_x,
+        "floor_plan_y": payload.floor_plan_y,
+    }
+    annotations_by_project.setdefault(project_id, []).append(annotation)
+    annotations_by_id[annotation_id] = annotation
+    return _annotation_response_from_memory(annotation)
+
+
+@app.get("/projects/{project_id}/annotations", response_model=list[AnnotationResponse], tags=["annotations"])
+def list_annotations(project_id: str, request: Request) -> list[AnnotationResponse]:
+    _ensure_project_ownership(project_id, _get_user_id(request))
+    if PERSISTENCE_MODE == "database":
+        with SessionLocal() as db:
+            if not db.get(ProjectRecord, project_id):
+                raise HTTPException(status_code=404, detail="Project not found")
+            records = db.query(AnnotationRecord).filter(AnnotationRecord.project_id == project_id).all()
+            return [_annotation_response_from_record(record) for record in records]
+    if project_id not in projects:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return [_annotation_response_from_memory(item) for item in annotations_by_project.get(project_id, [])]
+
+
 @app.post("/projects/{project_id}/pins", response_model=PinResponse, status_code=201, tags=["pins"])
 def create_pin(project_id: str, payload: PinCreateRequest, request: Request) -> PinResponse:
     user_id = _get_user_id(request)
@@ -794,6 +982,7 @@ def create_pin(project_id: str, payload: PinCreateRequest, request: Request) -> 
                 heading=payload.heading,
                 position_x=payload.position_x,
                 position_y=payload.position_y,
+                calibration_json=None,
                 telemetry_json=json.dumps(payload.telemetry) if payload.telemetry else None,
                 processing_status="metadata_received" if payload.telemetry else "not_requested",
                 captured_on=payload.captured_on,
@@ -818,7 +1007,14 @@ def create_pin(project_id: str, payload: PinCreateRequest, request: Request) -> 
         "heading": payload.heading,
         "position_x": payload.position_x,
         "position_y": payload.position_y,
+        "auto_position_x": None,
+        "auto_position_y": None,
+        "alignment_confidence": 0.0,
+        "calibration_state": "unreviewed",
+        "calibration_data": None,
         "telemetry": payload.telemetry,
+        "waypoints": None,
+        "preview_key": None,
         "processing_status": "metadata_received" if payload.telemetry else "not_requested",
         "processing_error": None,
         "captured_on": payload.captured_on,
@@ -829,7 +1025,47 @@ def create_pin(project_id: str, payload: PinCreateRequest, request: Request) -> 
     }
     pins_by_project[project_id].append(pin)
     pins_by_id[pin_id] = pin
-    return PinResponse(**pin)
+    return _pin_response_from_memory(pin)
+
+
+@app.patch("/projects/{project_id}/pins/{pin_id}/calibration", response_model=PinResponse, tags=["pins"])
+def update_pin_calibration(
+    project_id: str,
+    pin_id: str,
+    payload: PinCalibrationRequest,
+    request: Request,
+) -> PinResponse:
+    """Save a reviewer-verified floor-plan position while preserving auto-calibration."""
+    user_id = _get_user_id(request)
+    _ensure_project_ownership(project_id, user_id)
+    calibration_update = {
+        "state": "manually_verified",
+        "position_x": payload.position_x,
+        "position_y": payload.position_y,
+        "reviewed_by": user_id,
+        "note": payload.note,
+    }
+
+    if PERSISTENCE_MODE == "database":
+        with SessionLocal() as db:
+            pin = db.get(PinRecord, pin_id)
+            if not pin or pin.project_id != project_id:
+                raise HTTPException(status_code=404, detail="Pin not found")
+            pin.position_x = payload.position_x
+            pin.position_y = payload.position_y
+            pin.calibration_json = json.dumps(calibration_update)
+            db.commit()
+            db.refresh(pin)
+            return _pin_response_from_record(pin)
+
+    pin = pins_by_id.get(pin_id)
+    if not pin or pin["project_id"] != project_id:
+        raise HTTPException(status_code=404, detail="Pin not found")
+    pin["position_x"] = payload.position_x
+    pin["position_y"] = payload.position_y
+    pin["calibration_state"] = calibration_update["state"]
+    pin["calibration_data"] = calibration_update
+    return _pin_response_from_memory(pin)
 
 
 @app.get("/projects/{project_id}/pins", response_model=list[PinResponse], tags=["pins"])
@@ -846,7 +1082,7 @@ def list_pins(project_id: str, request: Request) -> list[PinResponse]:
 
     if project_id not in projects:
         raise HTTPException(status_code=404, detail="Project not found")
-    return [PinResponse(**pin) for pin in pins_by_project.get(project_id, [])]
+    return [_pin_response_from_memory(pin) for pin in pins_by_project.get(project_id, [])]
 
 
 @app.get("/projects/{project_id}/pins/{pin_id}", response_model=PinResponse, tags=["pins"])
@@ -872,7 +1108,7 @@ def get_pin(project_id: str, pin_id: str, request: Request) -> PinResponse:
     if not pin or pin["project_id"] != project_id:
         raise HTTPException(status_code=404, detail="Pin not found")
 
-    return PinResponse(**pin)
+    return _pin_response_from_memory(pin)
 
 
 @app.post("/projects/{project_id}/pins/{pin_id}/upload", response_model=UploadResponse, tags=["pins"])
@@ -960,6 +1196,28 @@ def process_pin_capture(project_id: str, pin_id: str, request: Request) -> dict[
             result = capture_processor.process(telemetry)
             pin.processing_status = str(result["status"])
             pin.processing_error = None if result["status"] == "ready" else str(result["message"])
+            
+            if result.get("parsed_telemetry"):
+                parsed = result["parsed_telemetry"]
+                waypoint_result = capture_processor.estimate_route_waypoints(parsed)
+                if waypoint_result.get("waypoints"):
+                    pin.waypoints_json = json.dumps(waypoint_result)
+                    
+                    calibration_result = capture_processor.calibrate_to_floor_plan(waypoint_result)
+                    pin.auto_position_x = calibration_result.get("auto_position_x")
+                    pin.auto_position_y = calibration_result.get("auto_position_y")
+                    pin.alignment_confidence = calibration_result.get("alignment_confidence", 0.0)
+                    pin.calibration_json = json.dumps(calibration_result)
+            
+            if pin.native_file_key and not pin.preview_key:
+                native_key_relative = pin.native_file_key.removeprefix("uploads/")
+                native_file_path = UPLOAD_DIR / native_key_relative
+                if native_file_path.exists():
+                    preview_result = capture_processor.extract_insp_preview(native_file_path)
+                    if preview_result.get("preview_available") and preview_result.get("preview_data"):
+                        preview_key = _store_preview(project_id, pin_id, preview_result["preview_data"])
+                        pin.preview_key = preview_key
+            
             db.commit()
             return result
 
@@ -969,7 +1227,30 @@ def process_pin_capture(project_id: str, pin_id: str, request: Request) -> dict[
     result = capture_processor.process(pin.get("telemetry"))
     pin["processing_status"] = str(result["status"])
     pin["processing_error"] = None if result["status"] == "ready" else str(result["message"])
+    
+    if result.get("parsed_telemetry"):
+        parsed = result["parsed_telemetry"]
+        waypoint_result = capture_processor.estimate_route_waypoints(parsed)
+        if waypoint_result.get("waypoints"):
+            pin["waypoints"] = waypoint_result.get("waypoints", [])
+            
+            calibration_result = capture_processor.calibrate_to_floor_plan(waypoint_result)
+            pin["auto_position_x"] = calibration_result.get("auto_position_x")
+            pin["auto_position_y"] = calibration_result.get("auto_position_y")
+            pin["alignment_confidence"] = calibration_result.get("alignment_confidence", 0.0)
+    
+    if pin.get("native_file_key") and not pin.get("preview_key"):
+        native_key_relative = pin["native_file_key"].removeprefix("uploads/")
+        native_file_path = UPLOAD_DIR / native_key_relative
+        if native_file_path.exists():
+            preview_result = capture_processor.extract_insp_preview(native_file_path)
+            if preview_result.get("preview_available") and preview_result.get("preview_data"):
+                preview_key = _store_preview(project_id, pin_id, preview_result["preview_data"])
+                pin["preview_key"] = preview_key
+    
     return result
+
+
 
 
 @app.post("/projects/{project_id}/floor-plan-upload", response_model=FloorPlanUploadResponse, tags=["projects"])

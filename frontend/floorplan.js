@@ -9,7 +9,7 @@ function buildApiBases() {
 }
 
 const apiBases = buildApiBases();
-const state = { project: null, plan: null, start: null, current: null, distance: 0, heading: 0, viewer: null, timer: null };
+const state = { project: null, plan: null, start: null, current: null, distance: 0, heading: 0, viewer: null, timer: null, calibrationPin: null, annotationMode: false, annotations: [] };
 const byId = (id) => document.getElementById(id);
 
 function setStatus(text) { byId('plan-status').textContent = text; }
@@ -55,10 +55,15 @@ function renderWaypoints() {
   (state.project?.pins || []).forEach((pin, index) => {
     if (pin.position_x == null || pin.position_y == null) return;
     const dot = document.createElement('button');
-    dot.type = 'button'; dot.className = 'waypoint'; dot.dataset.label = `#${index + 1}`;
+    dot.type = 'button'; dot.className = `waypoint ${pin.calibration_state === 'manually_verified' ? 'verified' : ''}`; dot.dataset.label = `#${index + 1}`;
     dot.style.left = `${pin.position_x * 100}%`; dot.style.top = `${pin.position_y * 100}%`;
     dot.title = `Open capture ${index + 1}`;
     dot.addEventListener('click', (event) => { event.stopPropagation(); event.preventDefault(); openCapture(pin, index + 1); });
+    layer.appendChild(dot);
+  });
+  state.annotations.forEach((annotation, index) => {
+    const dot = document.createElement('div'); dot.className = 'waypoint annotation-dot'; dot.dataset.label = `N${index + 1}`;
+    dot.style.left = `${annotation.floor_plan_x * 100}%`; dot.style.top = `${annotation.floor_plan_y * 100}%`; dot.title = annotation.body;
     layer.appendChild(dot);
   });
   if (state.current && !state.current.saved) {
@@ -66,6 +71,32 @@ function renderWaypoints() {
     current.style.left = `${state.current.x * 100}%`; current.style.top = `${state.current.y * 100}%`; layer.appendChild(current);
   }
   byId('waypoint-count').textContent = String((state.project?.pins || []).filter((pin) => pin.position_x != null).length);
+  renderCalibrationList();
+  renderAnnotationList();
+}
+
+function renderAnnotationList() {
+  const list = byId('annotation-list'); if (!list) return;
+  if (!state.annotations.length) { list.innerHTML = '<li class="small">No notes yet.</li>'; return; }
+  list.innerHTML = state.annotations.map((annotation, index) => `<li class="annotation-item"><strong>N${index + 1} · ${annotation.status.replace('_', ' ')}</strong><br /><span class="small">${annotation.body}</span></li>`).join('');
+}
+
+function renderCalibrationList() {
+  const list = byId('calibration-list');
+  if (!list) return;
+  const pins = (state.project?.pins || []).filter((pin) => pin.auto_position_x != null || pin.calibration_state === 'manually_verified');
+  if (!pins.length) { list.innerHTML = '<li class="small">No auto-placed captures yet.</li>'; return; }
+  list.innerHTML = '';
+  pins.forEach((pin) => {
+    const index = state.project.pins.indexOf(pin) + 1;
+    const item = document.createElement('li'); item.className = 'calibration-item';
+    const confidence = Math.round((pin.alignment_confidence || 0) * 100);
+    const stateLabel = pin.calibration_state === 'manually_verified' ? 'Verified' : `Auto ${confidence}%`;
+    item.innerHTML = `<span><strong>Capture #${index}</strong><small>${stateLabel} · ${Math.round((pin.position_x || 0) * 100)}%, ${Math.round((pin.position_y || 0) * 100)}%</small></span>`;
+    const button = document.createElement('button'); button.type = 'button'; button.className = 'quiet'; button.textContent = 'Correct on plan';
+    button.addEventListener('click', () => { state.calibrationPin = pin; setStatus(`Click the verified location for capture #${index}.`); });
+    item.appendChild(button); list.appendChild(item);
+  });
 }
 
 function setCurrent(x, y, isStart = false) {
@@ -79,8 +110,31 @@ function handlePlanClick(event) {
   const drawing = byId('plan-image') || byId('plan-canvas');
   if (!drawing) return;
   const rect = drawing.getBoundingClientRect();
-  setCurrent((event.clientX - rect.left) / rect.width, (event.clientY - rect.top) / rect.height, !state.start);
+  const x = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+  const y = Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height));
+  if (state.calibrationPin) { saveCalibration(state.calibrationPin, x, y); return; }
+  if (state.annotationMode) { saveAnnotation(x, y); return; }
+  setCurrent(x, y, !state.start);
   setStatus(state.start && state.distance ? 'Current route position updated.' : 'Starting point set. Walk a step or save a capture.');
+}
+
+async function saveAnnotation(x, y) {
+  const body = byId('annotation-body').value.trim();
+  if (!body) { setStatus('Enter a note before placing it on the plan.'); return; }
+  setStatus('Saving plan note...');
+  try {
+    const created = await apiRequest(`/projects/${state.project.id}/annotations`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ body, floor_plan_x: Number(x.toFixed(4)), floor_plan_y: Number(y.toFixed(4)), pin_id: byId('annotation-pin').value || null }) });
+    state.annotations.push(created); state.annotationMode = false; byId('annotation-body').value = ''; renderWaypoints(); setStatus('Plan note saved.');
+  } catch (error) { setStatus(`Note save failed: ${error.message}`); }
+}
+
+async function saveCalibration(pin, x, y) {
+  const index = state.project.pins.indexOf(pin) + 1;
+  setStatus(`Saving verified position for capture #${index}...`);
+  try {
+    const updated = await apiRequest(`/projects/${state.project.id}/pins/${pin.id}/calibration`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ position_x: Number(x.toFixed(4)), position_y: Number(y.toFixed(4)), note: 'Verified on floor plan.' }) });
+    Object.assign(pin, updated); state.calibrationPin = null; renderWaypoints(); setStatus(`Capture #${index} verified at ${Math.round(x * 100)}%, ${Math.round(y * 100)}%.`);
+  } catch (error) { setStatus(`Calibration save failed: ${error.message}`); }
 }
 
 function stepRoute() {
@@ -112,8 +166,16 @@ async function saveWaypoint() {
     const pin = await apiRequest(`/projects/${state.project.id}/pins`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ latitude: Number((5.55 + y * 0.02).toFixed(6)), longitude: Number((-0.25 + x * 0.02).toFixed(6)), heading: state.heading, position_x: x, position_y: y, captured_on: new Date().toISOString().slice(0, 10), media_type: 'insta360' }) });
     const photo = byId('photo-file').files[0]; const native = byId('native-file').files[0];
     if (photo) { const form = new FormData(); form.append('file', photo); await apiRequest(`/projects/${state.project.id}/pins/${pin.id}/upload`, { method: 'POST', body: form }); }
-    if (native) { const form = new FormData(); form.append('file', native); await apiRequest(`/projects/${state.project.id}/pins/${pin.id}/native-upload`, { method: 'POST', body: form }); }
-    state.project.pins.push({ ...pin, position_x: x, position_y: y, photo_key: photo ? `uploads/${state.project.id}/${pin.id}/${photo.name}` : null, native_file_key: native ? `uploads/${state.project.id}/${pin.id}/native/${native.name}` : null });
+    let previewUrl = null;
+    if (native) {
+      const form = new FormData(); form.append('file', native);
+      await apiRequest(`/projects/${state.project.id}/pins/${pin.id}/native-upload`, { method: 'POST', body: form });
+      setStatus('Generating 360 preview...');
+      await apiRequest(`/projects/${state.project.id}/pins/${pin.id}/process`, { method: 'POST' });
+      const refreshed = await apiRequest(`/projects/${state.project.id}/pins/${pin.id}`);
+      previewUrl = refreshed.preview_url || null;
+    }
+    state.project.pins.push({ ...pin, position_x: x, position_y: y, preview_url: previewUrl, photo_key: photo ? `uploads/${state.project.id}/${pin.id}/${photo.name}` : null, native_file_key: native ? `uploads/${state.project.id}/${pin.id}/native/${native.name}` : null });
     state.current.saved = true; renderWaypoints(); setStatus('Waypoint saved. Click its dot to open the capture.'); byId('photo-file').value = ''; byId('native-file').value = '';
   } catch (error) { setStatus(`Waypoint save failed: ${error.message}`); }
 }
@@ -122,12 +184,12 @@ function mediaUrl(key) { return key ? `${apiBases[0]}/media/${key}` : null; }
 function openCapture(pin, number) {
   byId('viewer-title').textContent = `Capture #${number} · heading ${pin.heading || 0}°`;
   byId('viewer-modal').classList.add('open');
-  const imageUrl = mediaUrl(pin.photo_key || pin.thumbnail_key);
+  const imageUrl = mediaUrl(pin.photo_key || pin.thumbnail_key) || (pin.preview_url ? `${apiBases[0]}${pin.preview_url}` : null);
   byId('plain-preview').style.display = 'none'; byId('panorama').style.display = 'block';
   if (state.viewer) { state.viewer.destroy(); state.viewer = null; }
   if (imageUrl && window.pannellum && pin.media_type === 'insta360') state.viewer = pannellum.viewer('panorama', { type: 'equirectangular', panorama: imageUrl, autoLoad: true, yaw: pin.heading || 0 });
   else if (imageUrl) { byId('panorama').style.display = 'none'; byId('plain-preview').src = imageUrl; byId('plain-preview').style.display = 'block'; }
-  else { byId('panorama').innerHTML = '<div style="color:white;padding:4rem 1rem;text-align:center">The original .insp file is saved, but it needs an exported preview image to display in this browser demo.</div>'; }
+  else { byId('panorama').innerHTML = '<div style="color:white;padding:4rem 1rem;text-align:center">No preview image yet. Upload a preview photo, or save the waypoint with its original .insp/.insv file and the app will generate one automatically.</div>'; }
 }
 
 async function loadProjects() {
@@ -140,22 +202,32 @@ async function loadProjects() {
 }
 
 async function selectProject(projectId) {
-  try { state.project = await apiRequest(`/projects/${projectId}/review`); state.start = null; state.current = null; state.distance = 0; byId('route-distance').textContent = '0.0 ft'; renderPlan(); renderWaypoints(); setStatus(`${state.project.title} loaded. Upload a plan or choose a saved route.`); }
+  try {
+    state.project = await apiRequest(`/projects/${projectId}/review`); state.annotations = await apiRequest(`/projects/${projectId}/annotations`); state.start = null; state.current = null; state.calibrationPin = null; state.annotationMode = false; state.distance = 0; byId('route-distance').textContent = '0.0 ft';
+    const pinSelect = byId('annotation-pin'); pinSelect.innerHTML = '<option value="">General plan note</option>';
+    state.project.pins.forEach((pin, index) => { const option = document.createElement('option'); option.value = pin.id; option.textContent = `Capture #${index + 1}`; pinSelect.appendChild(option); });
+    renderPlan(); renderWaypoints(); setStatus(`${state.project.title} loaded. Upload a plan or choose a saved route.`);
+  }
   catch (error) { setStatus(`Could not load project: ${error.message}`); }
 }
 
 function enableSensors() {
   if (!window.DeviceOrientationEvent) { byId('telemetry-status').textContent = 'This browser does not provide device heading sensors.'; return; }
-  window.addEventListener('deviceorientationabsolute', (event) => { if (typeof event.alpha === 'number') { state.heading = event.alpha; byId('heading').value = String(Math.round(state.heading)); byId('heading-value').textContent = `${Math.round(state.heading)}°`; } }, true);
+  window.addEventListener('deviceorientationabsolute', (event) => { if (typeof event.alpha === 'number') { state.heading = event.alpha; byId('heading').value = String(Math.round(state.heading)); byId('heading-value').textContent = headingLabel(state.heading); } }, true);
   byId('telemetry-status').textContent = 'Device heading enabled when supported by the browser.';
 }
 
 byId('project-select').addEventListener('change', (event) => selectProject(event.target.value));
 byId('floor-plan-file').addEventListener('change', (event) => uploadPlan(event.target.files[0]));
 byId('plan-wrap').addEventListener('click', handlePlanClick);
-byId('heading').addEventListener('input', (event) => { state.heading = Number(event.target.value); byId('heading-value').textContent = `${state.heading}°`; });
+function headingLabel(degrees) {
+  const cardinals = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+  return `${Math.round(degrees)}° ${cardinals[Math.round(degrees / 45) % 8]}`;
+}
+byId('heading').addEventListener('input', (event) => { state.heading = Number(event.target.value); byId('heading-value').textContent = headingLabel(state.heading); });
 byId('walk-step').addEventListener('click', stepRoute);
 byId('save-waypoint').addEventListener('click', saveWaypoint);
+byId('add-annotation').addEventListener('click', () => { if (!state.project) return; state.annotationMode = true; state.calibrationPin = null; setStatus('Click the note location on the floor plan.'); });
 byId('update-mode').addEventListener('change', (event) => {
   if (state.timer) { clearInterval(state.timer); state.timer = null; }
   if (event.target.value === 'interval') {
