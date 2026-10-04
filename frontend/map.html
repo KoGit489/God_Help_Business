@@ -102,6 +102,7 @@
         gap: 0.6rem;
         align-items: center;
       }
+      .heading-ticks { display: flex; justify-content: space-between; font-size: 0.72rem; font-weight: 700; color: var(--muted); padding: 0 2px; }
       .status-strip {
         display: grid;
         grid-template-columns: 1fr 1fr;
@@ -139,7 +140,10 @@
             <h1>Field capture</h1>
           </div>
         </div>
-        <span class="badge">mobile</span>
+        <div class="site-nav">
+          <a href="floorplan.html"><button class="secondary" type="button">Floor plan walkthrough</button></a>
+          <span class="badge">mobile</span>
+        </div>
       </header>
 
       <div class="card capture-card">
@@ -188,10 +192,11 @@
         <div>
           <div class="label">Heading</div>
           <input id="heading" type="range" min="0" max="360" value="35" />
+          <div class="heading-ticks"><span>0° N</span><span>90° E</span><span>180° S</span><span>270° W</span></div>
         </div>
         <div>
           <div class="label">&nbsp;</div>
-          <input id="heading-readout" value="35°" style="text-align:center;" />
+          <input id="heading-readout" value="35° NE" style="text-align:center;" />
         </div>
       </div>
 

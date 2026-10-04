@@ -18,10 +18,11 @@
       .plan-stage img { display: block; max-width: min(100%, 1000px); max-height: 70vh; width: auto; height: auto; background: white; }
       .plan-empty { min-height: 400px; display: grid; place-items: center; text-align: center; color: var(--muted); font-size: 1rem; padding: 2rem; }
       #waypoint-layer { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
-      .waypoint { position: absolute; width: 28px; height: 28px; transform: translate(-50%, -50%); border: 3px solid white; border-radius: 50%; background: var(--gold-dark); box-shadow: 0 3px 10px rgba(20, 23, 26, 0.35); cursor: pointer; z-index: 3; pointer-events: auto; }
-      .waypoint.current { width: 17px; height: 17px; background: var(--ink); animation: pulse 1.5s infinite; }
-      .waypoint::after { content: attr(data-label); position: absolute; left: 18px; top: 24px; white-space: nowrap; color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 0.2rem 0.35rem; font-size: 0.72rem; font-weight: 700; }
-      @keyframes pulse { 50% { box-shadow: 0 0 0 8px rgba(20, 23, 26, 0.14); } }
+      .waypoint { position: absolute; width: 28px; height: 28px; transform: translate(-50%, -50%); border: 12px solid transparent; border-radius: 50%; background: var(--gold-dark); background-clip: padding-box; box-shadow: none; cursor: pointer; z-index: 3; pointer-events: auto; }
+      .waypoint.current { background: var(--ink); animation: pulse 1.5s infinite; }
+      .waypoint::after { content: attr(data-label); position: absolute; left: 14px; top: 12px; white-space: nowrap; color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 0.2rem 0.35rem; font-size: 0.72rem; font-weight: 700; }
+      @keyframes pulse { 50% { box-shadow: 0 0 0 5px rgba(20, 23, 26, 0.18); } }
+      .heading-ticks { display: flex; justify-content: space-between; font-size: 0.72rem; font-weight: 700; color: var(--muted); padding: 0 2px; }
       .readout { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.45rem; }
       .readout div { background: var(--bg); border-radius: var(--radius-sm); padding: 0.55rem; text-align: center; font-size: 0.78rem; font-weight: 700; color: var(--gold-dark); }
       .status { min-height: 1.4rem; color: var(--muted); font-size: 0.86rem; }
@@ -56,7 +57,11 @@
             <h1>Floor plan walkthrough</h1>
           </div>
         </div>
-        <a href="index.html"><button class="quiet" type="button">Back to dashboard</button></a>
+        <nav class="site-nav">
+          <a href="map.html"><button class="secondary" type="button">Capture view</button></a>
+          <a href="review.html"><button class="secondary" type="button">Review view</button></a>
+          <a href="index.html"><button class="quiet" type="button">Back to dashboard</button></a>
+        </nav>
       </header>
       <p class="small" style="margin: -0.75rem 0 1rem;">Calibrate a drawing, walk a route, and leave clickable capture points for remote review.</p>
       <div class="layout">
@@ -70,7 +75,7 @@
           </div>
           <div id="plan-status" class="status">Choose a project and upload a floor plan to begin.</div>
           <div id="plan-wrap" class="plan-wrap"><div class="plan-empty">Your floor plan will appear here.<br />For clickable waypoints, upload a JPG or PNG export of the plan.</div></div>
-          <div class="readout"><div>Route<br /><span id="route-distance">0.0 ft</span></div><div>Waypoints<br /><span id="waypoint-count">0</span></div><div>Heading<br /><span id="heading-value">0°</span></div></div>
+          <div class="readout"><div>Route<br /><span id="route-distance">0.0 ft</span></div><div>Waypoints<br /><span id="waypoint-count">0</span></div><div>Heading<br /><span id="heading-value">0° N</span></div></div>
         </section>
         <aside class="stack">
           <section class="panel stack">
@@ -79,6 +84,7 @@
             <button id="set-gps" class="secondary" type="button">Use current GPS location</button>
             <button id="enable-sensors" class="quiet" type="button">Enable device heading</button>
             <label>Heading <input id="heading" type="range" min="0" max="359" value="0" /></label>
+            <div class="heading-ticks"><span>0° N</span><span>90° E</span><span>180° S</span><span>270° W</span></div>
             <label>Walk distance (feet)<input id="step-distance" type="number" min="0.1" step="0.1" value="1" /></label>
             <button id="walk-step" type="button" disabled>Walk one step</button>
             <div id="telemetry-status" class="small">GPS and device sensors are optional. The demo route uses calibrated dead reckoning when they are unavailable.</div>

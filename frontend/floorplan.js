@@ -166,8 +166,16 @@ async function saveWaypoint() {
     const pin = await apiRequest(`/projects/${state.project.id}/pins`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ latitude: Number((5.55 + y * 0.02).toFixed(6)), longitude: Number((-0.25 + x * 0.02).toFixed(6)), heading: state.heading, position_x: x, position_y: y, captured_on: new Date().toISOString().slice(0, 10), media_type: 'insta360' }) });
     const photo = byId('photo-file').files[0]; const native = byId('native-file').files[0];
     if (photo) { const form = new FormData(); form.append('file', photo); await apiRequest(`/projects/${state.project.id}/pins/${pin.id}/upload`, { method: 'POST', body: form }); }
-    if (native) { const form = new FormData(); form.append('file', native); await apiRequest(`/projects/${state.project.id}/pins/${pin.id}/native-upload`, { method: 'POST', body: form }); }
-    state.project.pins.push({ ...pin, position_x: x, position_y: y, photo_key: photo ? `uploads/${state.project.id}/${pin.id}/${photo.name}` : null, native_file_key: native ? `uploads/${state.project.id}/${pin.id}/native/${native.name}` : null });
+    let previewUrl = null;
+    if (native) {
+      const form = new FormData(); form.append('file', native);
+      await apiRequest(`/projects/${state.project.id}/pins/${pin.id}/native-upload`, { method: 'POST', body: form });
+      setStatus('Generating 360 preview...');
+      await apiRequest(`/projects/${state.project.id}/pins/${pin.id}/process`, { method: 'POST' });
+      const refreshed = await apiRequest(`/projects/${state.project.id}/pins/${pin.id}`);
+      previewUrl = refreshed.preview_url || null;
+    }
+    state.project.pins.push({ ...pin, position_x: x, position_y: y, preview_url: previewUrl, photo_key: photo ? `uploads/${state.project.id}/${pin.id}/${photo.name}` : null, native_file_key: native ? `uploads/${state.project.id}/${pin.id}/native/${native.name}` : null });
     state.current.saved = true; renderWaypoints(); setStatus('Waypoint saved. Click its dot to open the capture.'); byId('photo-file').value = ''; byId('native-file').value = '';
   } catch (error) { setStatus(`Waypoint save failed: ${error.message}`); }
 }
@@ -176,12 +184,12 @@ function mediaUrl(key) { return key ? `${apiBases[0]}/media/${key}` : null; }
 function openCapture(pin, number) {
   byId('viewer-title').textContent = `Capture #${number} · heading ${pin.heading || 0}°`;
   byId('viewer-modal').classList.add('open');
-  const imageUrl = mediaUrl(pin.photo_key || pin.thumbnail_key);
+  const imageUrl = mediaUrl(pin.photo_key || pin.thumbnail_key) || (pin.preview_url ? `${apiBases[0]}${pin.preview_url}` : null);
   byId('plain-preview').style.display = 'none'; byId('panorama').style.display = 'block';
   if (state.viewer) { state.viewer.destroy(); state.viewer = null; }
   if (imageUrl && window.pannellum && pin.media_type === 'insta360') state.viewer = pannellum.viewer('panorama', { type: 'equirectangular', panorama: imageUrl, autoLoad: true, yaw: pin.heading || 0 });
   else if (imageUrl) { byId('panorama').style.display = 'none'; byId('plain-preview').src = imageUrl; byId('plain-preview').style.display = 'block'; }
-  else { byId('panorama').innerHTML = '<div style="color:white;padding:4rem 1rem;text-align:center">The original .insp file is saved, but it needs an exported preview image to display in this browser demo.</div>'; }
+  else { byId('panorama').innerHTML = '<div style="color:white;padding:4rem 1rem;text-align:center">No preview image yet. Upload a preview photo, or save the waypoint with its original .insp/.insv file and the app will generate one automatically.</div>'; }
 }
 
 async function loadProjects() {
