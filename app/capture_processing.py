@@ -293,6 +293,104 @@ class CaptureProcessor:
                     "message": f"Could not extract or generate preview: {str(fallback_error)[:200]}",
                 }
 
+    def estimate_visual_motion(self, frame_paths: list[str | Path]) -> dict[str, Any]:
+        """Prototype: estimate inter-frame translation with OpenCV feature tracking (visual odometry)."""
+        try:
+            import cv2
+            import numpy as np
+        except ImportError:
+            return {
+                "source": "visual_odometry",
+                "available": False,
+                "segments": [],
+                "message": "OpenCV is not installed. Add 'opencv-python' to enable visual odometry.",
+            }
+
+        paths = [Path(p) for p in frame_paths]
+        if len(paths) < 2:
+            return {
+                "source": "visual_odometry",
+                "available": True,
+                "segments": [],
+                "message": "At least two frames are required to estimate visual motion.",
+            }
+
+        sift = cv2.SIFT_create()
+        matcher = cv2.BFMatcher(cv2.NORM_L2, crossCheck=False)
+        segments: list[dict[str, Any]] = []
+        previous_points: np.ndarray | None = None
+
+        for index, path in enumerate(paths):
+            if not path.exists():
+                return {
+                    "source": "visual_odometry",
+                    "available": True,
+                    "segments": segments,
+                    "message": f"Frame missing: {path.name}.",
+                }
+            image = cv2.imread(str(path))
+            if image is None:
+                return {
+                    "source": "visual_odometry",
+                    "available": True,
+                    "segments": segments,
+                    "message": f"Frame could not be decoded: {path.name}.",
+                }
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            keypoints, descriptors = sift.detectAndCompute(gray, None)
+
+            if previous_points is None or descriptors is None:
+                previous_points = keypoints
+                previous_descriptors = descriptors
+                continue
+
+            if previous_descriptors is None or descriptors is None or len(previous_points) < 8 or len(keypoints) < 8:
+                previous_points = keypoints
+                previous_descriptors = descriptors
+                segments.append({"segment": index - 1, "dx_px": 0.0, "dy_px": 0.0, "matches": 0, "confidence": 0.0})
+                continue
+
+            matches = matcher.knnMatch(previous_descriptors, descriptors, k=2)
+            good = [m for m, n in matches if m.distance < 0.7 * n.distance]
+            if len(good) < 8:
+                previous_points = keypoints
+                previous_descriptors = descriptors
+                segments.append({"segment": index - 1, "dx_px": 0.0, "dy_px": 0.0, "matches": len(good), "confidence": 0.0})
+                continue
+
+            prev_pts = np.float32([previous_points[m.queryIdx].pt for m in good]).reshape(-1, 2)
+            curr_pts = np.float32([keypoints[m.trainIdx].pt for m in good]).reshape(-1, 2)
+            translation = curr_pts - prev_pts
+            dx = float(np.median(translation[:, 0]))
+            dy = float(np.median(translation[:, 1]))
+            confidence = min(0.95, len(good) / 60.0)
+            segments.append({
+                "segment": index - 1,
+                "dx_px": round(dx, 2),
+                "dy_px": round(dy, 2),
+                "matches": len(good),
+                "confidence": round(confidence, 3),
+            })
+            previous_points = keypoints
+            previous_descriptors = descriptors
+
+        distances = [(s["dx_px"] ** 2 + s["dy_px"] ** 2) ** 0.5 for s in segments if s["matches"] >= 8]
+        avg_shift = sum(distances) / len(distances) if distances else 0.0
+        avg_confidence = sum(s["confidence"] for s in segments) / len(segments) if segments else 0.0
+
+        return {
+            "source": "visual_odometry",
+            "available": True,
+            "segments": segments,
+            "summary": {
+                "frames": len(paths),
+                "tracked_segments": len(distances),
+                "average_shift_px": round(avg_shift, 2),
+                "average_confidence": round(avg_confidence, 3),
+            },
+            "message": f"Visual odometry prototype estimated motion across {len(paths)} frames.",
+        }
+
     def calibrate_to_floor_plan(self, waypoint_result: dict[str, Any]) -> dict[str, Any]:
         """Calibrate normalized waypoints to floor-plan position and calculate alignment confidence."""
         waypoints = waypoint_result.get("waypoints", [])
@@ -390,8 +488,8 @@ class CaptureProcessor:
         return CaptureProcessingStatus(
             processor="manual",
             status="ready",
-            capabilities=("telemetry_metadata", "calibrated_dead_reckoning"),
-            message="Manual calibrated positioning is active; automatic SLAM is not configured.",
+            capabilities=("telemetry_metadata", "calibrated_dead_reckoning", "visual_odometry_prototype"),
+            message="Manual calibrated positioning is active; automatic SLAM is not configured. A visual odometry prototype is available for frame-based motion estimation.",
         )
 
     def process(self, telemetry: dict[str, Any] | bytes | str | None = None) -> dict[str, Any]:

@@ -796,3 +796,50 @@ def test_annotations_reject_invalid_status_or_foreign_pin() -> None:
     assert foreign_link.status_code == 404
 
 
+def test_visual_odometry_prototype_reports_unavailable_frames() -> None:
+    reset_demo_store()
+
+    project = client.post("/projects", json={"title": "VO Demo"}).json()
+    response = client.post(f"/projects/{project['id']}/visual-odometry")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["source"] == "visual_odometry"
+    assert payload["segments"] == []
+    assert "No preview frames" in payload["message"]
+
+
+def test_visual_odometry_estimates_motion_between_frames() -> None:
+    reset_demo_store()
+
+    from app.capture_processing import CaptureProcessor
+    from PIL import Image, ImageDraw
+
+    import tempfile
+    from pathlib import Path
+
+    frames: list[Path] = []
+    try:
+        for offset in (0, 40):
+            img = Image.new("RGB", (640, 360), (30, 30, 30))
+            draw = ImageDraw.Draw(img)
+            # Deterministic high-texture pattern for SIFT keypoints
+            for x in range(0, 640, 32):
+                for y in range(0, 360, 32):
+                    draw.rectangle([x + offset, y, x + offset + 8, y + 8], fill=(240, 220, 60))
+            tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
+            tmp.close()
+            img.save(tmp.name, format="JPEG")
+            frames.append(Path(tmp.name))
+
+        result = CaptureProcessor().estimate_visual_motion(frames)
+        assert result["source"] == "visual_odometry"
+        if result["available"]:
+            assert "summary" in result
+            assert result["summary"]["frames"] == 2
+        else:
+            assert "OpenCV is not installed" in result["message"]
+    finally:
+        for frame in frames:
+            frame.unlink(missing_ok=True)
+
+

@@ -747,6 +747,32 @@ def capture_processing_status() -> dict[str, object]:
     }
 
 
+@app.post("/projects/{project_id}/visual-odometry", tags=["capture-processing"])
+def project_visual_odometry(project_id: str, request: Request) -> dict[str, object]:
+    """Estimate motion across the ordered preview frames of a project's pins."""
+    _ensure_project_ownership(project_id, _get_user_id(request))
+    frame_paths: list[str] = []
+    if PERSISTENCE_MODE == "database":
+        with SessionLocal() as db:
+            pins = db.query(PinRecord).filter(PinRecord.project_id == project_id).order_by(PinRecord.captured_on).all()
+            for pin in pins:
+                if pin.preview_key:
+                    candidate = UPLOAD_DIR / pin.preview_key.removeprefix("uploads/")
+                    if candidate.exists():
+                        frame_paths.append(str(candidate))
+    else:
+        for pin in pins_by_project.get(project_id, []):
+            if pin.get("preview_key"):
+                candidate = UPLOAD_DIR / pin["preview_key"].removeprefix("uploads/")
+                if candidate.exists():
+                    frame_paths.append(str(candidate))
+
+    if not frame_paths:
+        return {"source": "visual_odometry", "available": True, "segments": [], "message": "No preview frames are available yet. Save waypoints with native .insp/.insv files first."}
+
+    return capture_processor.estimate_visual_motion(frame_paths)
+
+
 @app.post("/projects", response_model=ProjectResponse, status_code=201, tags=["projects"])
 def create_project(payload: ProjectCreateRequest, request: Request) -> ProjectResponse:
     user_id = _get_user_id(request)
