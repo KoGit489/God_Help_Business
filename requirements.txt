@@ -6,3 +6,6 @@ sqlalchemy>=2.0,<2.1
 pytest>=8.0,<9.0
 python-multipart>=0.0.9,<0.1
 boto3>=1.34,<2.0
+# Visual odometry prototype (optional; app runs without these)
+opencv-python-headless>=4.9,<5.0
+numpy>=1.26,<3.0

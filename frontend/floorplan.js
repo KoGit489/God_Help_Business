@@ -9,7 +9,7 @@ function buildApiBases() {
 }
 
 const apiBases = buildApiBases();
-const state = { project: null, plan: null, start: null, current: null, distance: 0, heading: 0, viewer: null, timer: null, calibrationPin: null, annotationMode: false, annotations: [] };
+const state = { project: null, plan: null, start: null, current: null, distance: 0, heading: 0, viewer: null, timer: null, calibrationPin: null, annotationMode: false, annotations: [], editingPin: null };
 const byId = (id) => document.getElementById(id);
 
 function setStatus(text) { byId('plan-status').textContent = text; }
@@ -37,8 +37,13 @@ function renderPlan() {
     if (!window.pdfjsLib) { wrap.innerHTML = `<iframe title="Floor plan PDF" src="${state.plan.media_url}" style="width:100%;height:70vh;border:0;background:white;"></iframe>`; return; }
     window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
     window.pdfjsLib.getDocument(state.plan.media_url).promise.then((pdf) => pdf.getPage(1)).then((page) => {
-      const viewport = page.getViewport({ scale: 1.5 }); const canvas = byId('plan-canvas');
-      canvas.width = viewport.width; canvas.height = viewport.height; canvas.style.maxWidth = 'min(100%, 1000px)'; canvas.style.height = 'auto';
+      const canvas = byId('plan-canvas');
+      const baseViewport = page.getViewport({ scale: 1 });
+      const maxDisplayWidth = Math.min(1000, wrap.clientWidth - 16);
+      const displayScale = Math.min(1.5, maxDisplayWidth / baseViewport.width);
+      const viewport = page.getViewport({ scale: displayScale * 2 });
+      canvas.width = viewport.width; canvas.height = viewport.height;
+      canvas.style.width = `${viewport.width / 2}px`; canvas.style.height = `${viewport.height / 2}px`;
       return page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
     }).then(renderWaypoints).catch(() => { setStatus('The PDF viewer could not render this plan. Export it as JPG or PNG for clickable waypoints.'); });
     return;
@@ -71,8 +76,59 @@ function renderWaypoints() {
     current.style.left = `${state.current.x * 100}%`; current.style.top = `${state.current.y * 100}%`; layer.appendChild(current);
   }
   byId('waypoint-count').textContent = String((state.project?.pins || []).filter((pin) => pin.position_x != null).length);
+  renderWaypointList();
   renderCalibrationList();
   renderAnnotationList();
+}
+
+function renderWaypointList() {
+  const list = byId('waypoint-list'); if (!list) return;
+  const pins = state.project?.pins || [];
+  if (!pins.length) { list.innerHTML = '<li class="small">No waypoints yet.</li>'; return; }
+  list.innerHTML = '';
+  pins.forEach((pin, index) => {
+    const item = document.createElement('li');
+    const hasMedia = Boolean(pin.photo_key || pin.preview_url || pin.native_file_key);
+    item.innerHTML = `<strong>#${index + 1}</strong> · ${Math.round((pin.position_x || 0) * 100)}%, ${Math.round((pin.position_y || 0) * 100)}% ${hasMedia ? '📷' : ''}`;
+    const open = document.createElement('button'); open.type = 'button'; open.textContent = 'View';
+    open.addEventListener('click', () => openCapture(pin, index + 1));
+    const edit = document.createElement('button'); edit.type = 'button'; edit.textContent = 'Edit';
+    edit.addEventListener('click', () => startEdit(pin, index));
+    const del = document.createElement('button'); del.type = 'button'; del.textContent = 'Delete'; del.style.color = 'var(--danger)';
+    del.addEventListener('click', () => deleteWaypoint(pin, index));
+    item.append(open, edit, del); list.appendChild(item);
+  });
+}
+
+function startEdit(pin, index) {
+  state.editingPin = pin;
+  byId('edit-panel').style.display = 'grid';
+  byId('edit-waypoint-label').textContent = `#${index + 1}`;
+  byId('edit-photo-file').value = '';
+}
+
+async function applyEdit() {
+  const pin = state.editingPin; if (!pin) return;
+  const photo = byId('edit-photo-file').files[0];
+  setStatus('Saving changes...');
+  try {
+    if (photo) { const form = new FormData(); form.append('file', photo); await apiRequest(`/projects/${state.project.id}/pins/${pin.id}/upload`, { method: 'POST', body: form }); }
+    const refreshed = await apiRequest(`/projects/${state.project.id}/pins/${pin.id}`);
+    Object.assign(pin, refreshed);
+    state.editingPin = null; byId('edit-panel').style.display = 'none'; renderWaypoints();
+    setStatus('Waypoint updated.');
+  } catch (error) { setStatus(`Edit failed: ${error.message}`); }
+}
+
+async function deleteWaypoint(pin, index) {
+  if (!confirm(`Delete waypoint #${index + 1}? This removes the pin and its capture.`)) return;
+  setStatus(`Deleting waypoint #${index + 1}...`);
+  try {
+    await apiRequest(`/projects/${state.project.id}/pins/${pin.id}`, { method: 'DELETE' });
+    state.project.pins = state.project.pins.filter((p) => p.id !== pin.id);
+    state.editingPin = null; byId('edit-panel').style.display = 'none'; renderWaypoints();
+    setStatus(`Waypoint #${index + 1} deleted.`);
+  } catch (error) { setStatus(`Delete failed: ${error.message}`); }
 }
 
 function renderAnnotationList() {
@@ -180,11 +236,11 @@ async function saveWaypoint() {
   } catch (error) { setStatus(`Waypoint save failed: ${error.message}`); }
 }
 
-function mediaUrl(key) { return key ? `${apiBases[0]}/media/${key}` : null; }
+function mediaUrl(key) { return key ? `/media/${key}` : null; }
 function openCapture(pin, number) {
   byId('viewer-title').textContent = `Capture #${number} · heading ${pin.heading || 0}°`;
   byId('viewer-modal').classList.add('open');
-  const imageUrl = mediaUrl(pin.photo_key || pin.thumbnail_key) || (pin.preview_url ? `${apiBases[0]}${pin.preview_url}` : null);
+  const imageUrl = mediaUrl(pin.photo_key || pin.thumbnail_key) || (pin.preview_url || null);
   byId('plain-preview').style.display = 'none'; byId('panorama').style.display = 'block';
   if (state.viewer) { state.viewer.destroy(); state.viewer = null; }
   if (imageUrl && window.pannellum && pin.media_type === 'insta360') state.viewer = pannellum.viewer('panorama', { type: 'equirectangular', panorama: imageUrl, autoLoad: true, yaw: pin.heading || 0 });
@@ -213,7 +269,7 @@ async function selectProject(projectId) {
 
 function enableSensors() {
   if (!window.DeviceOrientationEvent) { byId('telemetry-status').textContent = 'This browser does not provide device heading sensors.'; return; }
-  window.addEventListener('deviceorientationabsolute', (event) => { if (typeof event.alpha === 'number') { state.heading = event.alpha; byId('heading').value = String(Math.round(state.heading)); byId('heading-value').textContent = headingLabel(state.heading); } }, true);
+  window.addEventListener('deviceorientationabsolute', (event) => { if (typeof event.alpha === 'number') { state.heading = event.alpha; byId('heading').value = String(Math.round(state.heading)); const label = headingLabel(state.heading); byId('heading-value').textContent = label; byId('heading-live').textContent = label; } }, true);
   byId('telemetry-status').textContent = 'Device heading enabled when supported by the browser.';
 }
 
@@ -224,7 +280,7 @@ function headingLabel(degrees) {
   const cardinals = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
   return `${Math.round(degrees)}° ${cardinals[Math.round(degrees / 45) % 8]}`;
 }
-byId('heading').addEventListener('input', (event) => { state.heading = Number(event.target.value); byId('heading-value').textContent = headingLabel(state.heading); });
+byId('heading').addEventListener('input', (event) => { state.heading = Number(event.target.value); const label = headingLabel(state.heading); byId('heading-value').textContent = label; byId('heading-live').textContent = label; });
 byId('walk-step').addEventListener('click', stepRoute);
 byId('save-waypoint').addEventListener('click', saveWaypoint);
 byId('add-annotation').addEventListener('click', () => { if (!state.project) return; state.annotationMode = true; state.calibrationPin = null; setStatus('Click the note location on the floor plan.'); });
@@ -238,4 +294,6 @@ byId('update-mode').addEventListener('change', (event) => {
 byId('enable-sensors').addEventListener('click', enableSensors);
 byId('set-gps').addEventListener('click', () => { if (!navigator.geolocation) { byId('telemetry-status').textContent = 'GPS is not available in this browser.'; return; } navigator.geolocation.getCurrentPosition(() => { byId('telemetry-status').textContent = 'GPS is available. Click the plan to calibrate its matching starting point.'; }, () => { byId('telemetry-status').textContent = 'GPS permission was unavailable; the calibrated demo route is still ready.'; }); });
 byId('close-viewer').addEventListener('click', () => { byId('viewer-modal').classList.remove('open'); if (state.viewer) { state.viewer.destroy(); state.viewer = null; } });
+byId('apply-edit').addEventListener('click', applyEdit);
+byId('cancel-edit').addEventListener('click', () => { state.editingPin = null; byId('edit-panel').style.display = 'none'; });
 loadProjects();

@@ -736,7 +736,41 @@ def test_manual_calibration_rejects_coordinates_outside_floor_plan() -> None:
     assert response.status_code == 422
 
 
-def test_annotations_can_be_created_linked_to_a_pin_and_listed() -> None:
+def test_delete_pin_removes_waypoint() -> None:
+    reset_demo_store()
+
+    project = client.post("/projects", json={"title": "Delete Demo"}).json()
+    pin = client.post(
+        f"/projects/{project['id']}/pins",
+        json={"latitude": 5.56, "longitude": -0.24, "heading": 90, "position_x": 0.5, "position_y": 0.5, "captured_on": "2026-08-20"},
+    ).json()
+
+    delete_response = client.delete(f"/projects/{project['id']}/pins/{pin['id']}")
+    assert delete_response.status_code == 200
+    assert delete_response.json()["deleted"] is True
+
+    get_response = client.get(f"/projects/{project['id']}/pins/{pin['id']}")
+    assert get_response.status_code == 404
+
+
+def test_update_pin_heading() -> None:
+    reset_demo_store()
+
+    project = client.post("/projects", json={"title": "Edit Demo"}).json()
+    pin = client.post(
+        f"/projects/{project['id']}/pins",
+        json={"latitude": 5.56, "longitude": -0.24, "heading": 90, "captured_on": "2026-08-20"},
+    ).json()
+
+    update_response = client.patch(
+        f"/projects/{project['id']}/pins/{pin['id']}",
+        json={"heading": 180},
+    )
+    assert update_response.status_code == 200
+    assert update_response.json()["heading"] == 180.0
+
+    fetched = client.get(f"/projects/{project['id']}/pins/{pin['id']}").json()
+    assert fetched["heading"] == 180.0
     reset_demo_store()
 
     project = client.post("/projects", json={"title": "Markup Review"}).json()
@@ -794,5 +828,52 @@ def test_annotations_reject_invalid_status_or_foreign_pin() -> None:
         json={"body": "Wrong project", "floor_plan_x": 0.5, "floor_plan_y": 0.5, "pin_id": foreign_pin["id"]},
     )
     assert foreign_link.status_code == 404
+
+
+def test_visual_odometry_prototype_reports_unavailable_frames() -> None:
+    reset_demo_store()
+
+    project = client.post("/projects", json={"title": "VO Demo"}).json()
+    response = client.post(f"/projects/{project['id']}/visual-odometry")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["source"] == "visual_odometry"
+    assert payload["segments"] == []
+    assert "No preview frames" in payload["message"]
+
+
+def test_visual_odometry_estimates_motion_between_frames() -> None:
+    reset_demo_store()
+
+    from app.capture_processing import CaptureProcessor
+    from PIL import Image, ImageDraw
+
+    import tempfile
+    from pathlib import Path
+
+    frames: list[Path] = []
+    try:
+        for offset in (0, 40):
+            img = Image.new("RGB", (640, 360), (30, 30, 30))
+            draw = ImageDraw.Draw(img)
+            # Deterministic high-texture pattern for SIFT keypoints
+            for x in range(0, 640, 32):
+                for y in range(0, 360, 32):
+                    draw.rectangle([x + offset, y, x + offset + 8, y + 8], fill=(240, 220, 60))
+            tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
+            tmp.close()
+            img.save(tmp.name, format="JPEG")
+            frames.append(Path(tmp.name))
+
+        result = CaptureProcessor().estimate_visual_motion(frames)
+        assert result["source"] == "visual_odometry"
+        if result["available"]:
+            assert "summary" in result
+            assert result["summary"]["frames"] == 2
+        else:
+            assert "OpenCV is not installed" in result["message"]
+    finally:
+        for frame in frames:
+            frame.unlink(missing_ok=True)
 
 
