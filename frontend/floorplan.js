@@ -37,8 +37,13 @@ function renderPlan() {
     if (!window.pdfjsLib) { wrap.innerHTML = `<iframe title="Floor plan PDF" src="${state.plan.media_url}" style="width:100%;height:70vh;border:0;background:white;"></iframe>`; return; }
     window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
     window.pdfjsLib.getDocument(state.plan.media_url).promise.then((pdf) => pdf.getPage(1)).then((page) => {
-      const viewport = page.getViewport({ scale: 1.5 }); const canvas = byId('plan-canvas');
-      canvas.width = viewport.width; canvas.height = viewport.height; canvas.style.maxWidth = 'min(100%, 1000px)'; canvas.style.height = 'auto';
+      const canvas = byId('plan-canvas');
+      const baseViewport = page.getViewport({ scale: 1 });
+      const maxDisplayWidth = Math.min(1000, wrap.clientWidth - 16);
+      const displayScale = Math.min(1.5, maxDisplayWidth / baseViewport.width);
+      const viewport = page.getViewport({ scale: displayScale * 2 });
+      canvas.width = viewport.width; canvas.height = viewport.height;
+      canvas.style.width = `${viewport.width / 2}px`; canvas.style.height = `${viewport.height / 2}px`;
       return page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
     }).then(renderWaypoints).catch(() => { setStatus('The PDF viewer could not render this plan. Export it as JPG or PNG for clickable waypoints.'); });
     return;

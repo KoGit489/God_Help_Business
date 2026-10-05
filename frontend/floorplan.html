@@ -16,11 +16,13 @@
       .plan-wrap { position: relative; min-height: 520px; display: grid; place-items: center; overflow: auto; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 0.75rem; }
       .plan-stage { position: relative; display: inline-block; max-width: 100%; line-height: 0; }
       .plan-stage img { display: block; max-width: min(100%, 1000px); max-height: 70vh; width: auto; height: auto; background: white; }
+      .plan-stage canvas { display: block; max-width: min(100%, 1000px); max-height: 70vh; width: 100%; height: auto; background: white; }
       .plan-empty { min-height: 400px; display: grid; place-items: center; text-align: center; color: var(--muted); font-size: 1rem; padding: 2rem; }
       #waypoint-layer { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
-      .waypoint { position: absolute; width: 21px; height: 21px; transform: translate(-50%, -50%); border: 0; border-radius: 50%; background: var(--gold-dark); box-shadow: 0 0 0 2px #fff; cursor: pointer; z-index: 3; pointer-events: auto; }
-      .waypoint.current { width: 20px; height: 20px; background: var(--ink); animation: pulse 1.5s infinite; }
-      .waypoint::after { content: attr(data-label); position: absolute; left: 14px; top: 10px; white-space: nowrap; color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 0.2rem 0.35rem; font-size: 0.72rem; font-weight: 700; }
+      .waypoint { position: absolute; width: 8px; height: 8px; transform: translate(-50%, -50%); border: 0; border-radius: 50%; background: var(--gold-dark); box-shadow: 0 0 0 1.5px #fff; cursor: pointer; z-index: 3; pointer-events: auto; }
+      .waypoint::before { content: ""; position: absolute; inset: -14px; border-radius: 50%; }
+      .waypoint.current { width: 8px; height: 8px; background: var(--ink); animation: pulse 1.5s infinite; }
+      .waypoint::after { content: attr(data-label); position: absolute; left: 10px; top: 6px; white-space: nowrap; color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 0.2rem 0.35rem; font-size: 0.72rem; font-weight: 700; }
       @keyframes pulse { 50% { box-shadow: 0 0 0 4px rgba(20, 23, 26, 0.18); } }
       .heading-ticks { display: flex; justify-content: space-between; font-size: 0.72rem; font-weight: 700; color: var(--muted); padding: 0 2px; }
       .heading-live { display: inline-block; margin-left: 0.5rem; padding: 0.15rem 0.5rem; border-radius: var(--radius-sm); background: var(--gold-tint); color: var(--gold-dark); font-weight: 700; font-size: 0.85rem; }
@@ -127,6 +129,6 @@
       <div class="viewer"><div class="viewer-head"><span id="viewer-title">Capture</span><button id="close-viewer" class="quiet" type="button">Close</button></div><div id="panorama"></div><img id="plain-preview" alt="Capture preview" /></div>
     </div>
     <script src="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.js"></script>
-    <script src="floorplan.js?v=2"></script>
+    <script src="floorplan.js?v=3"></script>
   </body>
 </html>
