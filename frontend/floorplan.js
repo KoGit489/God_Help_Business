@@ -250,39 +250,55 @@ function openCapture(pin, number) {
   if (state.viewer) { state.viewer.destroy(); state.viewer = null; }
   clearNavArrows();
   if (imageUrl && window.pannellum && pin.media_type === 'insta360') {
-    state.viewer = pannellum.viewer('panorama', { type: 'equirectangular', panorama: imageUrl, autoLoad: true, yaw: pin.heading || 0 });
-    placeNavArrows(pin);
+    state.viewer = pannellum.viewer('panorama', { type: 'equirectangular', panorama: imageUrl, autoLoad: true, yaw: pin.heading || 0, horizon: 0, haov: 360, vaov: 180, minYaw: -180, maxYaw: 180, wrap: true });
+    if (typeof state.viewer.on === 'function') { state.viewer.on('animate', () => updateNavArrow(pin)); }
+    updateNavArrow(pin);
   }
-  else if (imageUrl) { byId('panorama').style.display = 'none'; byId('plain-preview').src = imageUrl; byId('plain-preview').style.display = 'block'; placeNavArrows(pin); }
+  else if (imageUrl) { byId('panorama').style.display = 'none'; byId('plain-preview').src = imageUrl; byId('plain-preview').style.display = 'block'; updateNavArrow(pin); }
   else { byId('panorama').innerHTML = '<div style="color:white;padding:4rem 1rem;text-align:center">No preview image yet. Upload a preview photo, or save the waypoint with its original .insp/.insv file and the app will generate one automatically.</div>'; }
   updateNavButtons();
 }
 
 function clearNavArrows() { document.querySelectorAll('.nav-arrow').forEach((el) => el.remove()); }
 
-function neighborPins(pin) {
+function nearestNeighbor(pin) {
   const others = viewerPins().filter((p) => p.id !== pin.id);
-  return others.map((p) => {
+  if (!others.length) return null;
+  let best = null; let bestDist = Infinity;
+  others.forEach((p) => {
     const dx = p.position_x - pin.position_x; const dy = p.position_y - pin.position_y;
-    const angle = (Math.atan2(dx, -dy) * 180 / Math.PI + 360) % 360;
     const dist = Math.sqrt(dx * dx + dy * dy);
-    return { pin: p, angle, dist };
-  }).sort((a, b) => a.dist - b.dist);
+    if (dist < bestDist) { bestDist = dist; best = p; }
+  });
+  return best;
 }
 
-function placeNavArrows(pin) {
+function bearingBetween(fromPin, toPin) {
+  const dx = toPin.position_x - fromPin.position_x; const dy = toPin.position_y - fromPin.position_y;
+  return (Math.atan2(dx, -dy) * 180 / Math.PI + 360) % 360;
+}
+
+function currentViewYaw(pin) {
+  if (state.viewer && typeof state.viewer.getYaw === 'function') return state.viewer.getYaw();
+  return pin.heading || 0;
+}
+
+function updateNavArrow(pin) {
+  clearNavArrows();
+  const neighbor = nearestNeighbor(pin); if (!neighbor) return;
   const container = byId('panorama');
-  const neighbors = neighborPins(pin).slice(0, 3);
-  neighbors.forEach((n) => {
-    const rel = ((n.angle - (pin.heading || 0)) + 360) % 360;
-    const arrow = document.createElement('button');
-    arrow.type = 'button'; arrow.className = 'nav-arrow'; arrow.title = `Go to capture (heading ${Math.round(n.angle)}°)`;
-    arrow.textContent = '➤';
-    arrow.style.left = `${18 + (rel / 360) * 64}%`;
-    arrow.style.transform = `rotate(${rel - 90}deg)`;
-    arrow.addEventListener('click', (event) => { event.stopPropagation(); openCapture(n.pin, state.project.pins.indexOf(n.pin) + 1); });
-    container.appendChild(arrow);
-  });
+  const targetBearing = bearingBetween(pin, neighbor);
+  const viewYaw = currentViewYaw(pin);
+  const rel = ((targetBearing - viewYaw) % 360 + 360) % 360;
+  const signed = rel > 180 ? rel - 360 : rel;
+  if (Math.abs(signed) > 120) return;
+  const arrow = document.createElement('button');
+  arrow.type = 'button'; arrow.className = 'nav-arrow'; arrow.title = `Go to capture (heading ${Math.round(targetBearing)}°)`;
+  arrow.innerHTML = '<span class="tip"></span>';
+  arrow.style.left = `${50 + (signed / 120) * 40}%`;
+  arrow.querySelector('.tip').style.transform = `rotate(${signed}deg)`;
+  arrow.addEventListener('click', (event) => { event.stopPropagation(); openCapture(neighbor, state.project.pins.indexOf(neighbor) + 1); });
+  container.appendChild(arrow);
 }
 
 function stepViewer(direction) {
@@ -303,17 +319,12 @@ function updateNavButtons() {
 function handleViewerClick(event) {
   if (event.target.closest('.nav-arrow') || event.target.closest('button')) return;
   const currentPin = state.project.pins[state.viewerIndex]; if (!currentPin) return;
-  const neighbors = neighborPins(currentPin); if (!neighbors.length) return;
-  const rect = byId('panorama').getBoundingClientRect();
-  const clickFrac = (event.clientX - rect.left) / rect.width;
-  const viewYaw = state.viewer && typeof state.viewer.getYaw === 'function' ? state.viewer.getYaw() : (currentPin.heading || 0);
-  const clickAngle = ((viewYaw + (clickFrac - 0.5) * 120) % 360 + 360) % 360;
-  let best = null; let bestDiff = 181;
-  neighbors.forEach((n) => {
-    const diff = Math.min(Math.abs(n.angle - clickAngle), 360 - Math.abs(n.angle - clickAngle));
-    if (diff < bestDiff) { bestDiff = diff; best = n; }
-  });
-  if (best && bestDiff < 60) openCapture(best.pin, state.project.pins.indexOf(best.pin) + 1);
+  const neighbor = nearestNeighbor(currentPin); if (!neighbor) return;
+  const targetBearing = bearingBetween(currentPin, neighbor);
+  const viewYaw = currentViewYaw(currentPin);
+  const rel = ((targetBearing - viewYaw) % 360 + 360) % 360;
+  const signed = rel > 180 ? rel - 360 : rel;
+  if (Math.abs(signed) <= 120) openCapture(neighbor, state.project.pins.indexOf(neighbor) + 1);
 }
 
 async function loadProjects() {
