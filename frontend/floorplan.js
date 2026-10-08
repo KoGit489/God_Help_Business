@@ -9,7 +9,7 @@ function buildApiBases() {
 }
 
 const apiBases = buildApiBases();
-const state = { project: null, plan: null, start: null, current: null, distance: 0, heading: 0, viewer: null, timer: null, calibrationPin: null, annotationMode: false, annotations: [], editingPin: null };
+const state = { project: null, plan: null, start: null, current: null, distance: 0, heading: 0, viewer: null, timer: null, calibrationPin: null, annotationMode: false, annotations: [], editingPin: null, viewerIndex: -1 };
 const byId = (id) => document.getElementById(id);
 
 function setStatus(text) { byId('plan-status').textContent = text; }
@@ -237,15 +237,83 @@ async function saveWaypoint() {
 }
 
 function mediaUrl(key) { return key ? `/media/${key}` : null; }
+function viewerPins() { return (state.project?.pins || []).filter((p) => p.position_x != null && p.position_y != null); }
+
 function openCapture(pin, number) {
+  const pins = viewerPins();
+  const listIndex = state.project.pins.indexOf(pin);
+  state.viewerIndex = listIndex;
   byId('viewer-title').textContent = `Capture #${number} · heading ${pin.heading || 0}°`;
   byId('viewer-modal').classList.add('open');
   const imageUrl = mediaUrl(pin.photo_key || pin.thumbnail_key) || (pin.preview_url || null);
   byId('plain-preview').style.display = 'none'; byId('panorama').style.display = 'block';
   if (state.viewer) { state.viewer.destroy(); state.viewer = null; }
-  if (imageUrl && window.pannellum && pin.media_type === 'insta360') state.viewer = pannellum.viewer('panorama', { type: 'equirectangular', panorama: imageUrl, autoLoad: true, yaw: pin.heading || 0 });
-  else if (imageUrl) { byId('panorama').style.display = 'none'; byId('plain-preview').src = imageUrl; byId('plain-preview').style.display = 'block'; }
+  clearNavArrows();
+  if (imageUrl && window.pannellum && pin.media_type === 'insta360') {
+    state.viewer = pannellum.viewer('panorama', { type: 'equirectangular', panorama: imageUrl, autoLoad: true, yaw: pin.heading || 0 });
+    placeNavArrows(pin);
+  }
+  else if (imageUrl) { byId('panorama').style.display = 'none'; byId('plain-preview').src = imageUrl; byId('plain-preview').style.display = 'block'; placeNavArrows(pin); }
   else { byId('panorama').innerHTML = '<div style="color:white;padding:4rem 1rem;text-align:center">No preview image yet. Upload a preview photo, or save the waypoint with its original .insp/.insv file and the app will generate one automatically.</div>'; }
+  updateNavButtons();
+}
+
+function clearNavArrows() { document.querySelectorAll('.nav-arrow').forEach((el) => el.remove()); }
+
+function neighborPins(pin) {
+  const others = viewerPins().filter((p) => p.id !== pin.id);
+  return others.map((p) => {
+    const dx = p.position_x - pin.position_x; const dy = p.position_y - pin.position_y;
+    const angle = (Math.atan2(dx, -dy) * 180 / Math.PI + 360) % 360;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    return { pin: p, angle, dist };
+  }).sort((a, b) => a.dist - b.dist);
+}
+
+function placeNavArrows(pin) {
+  const container = byId('panorama');
+  const neighbors = neighborPins(pin).slice(0, 3);
+  neighbors.forEach((n) => {
+    const rel = ((n.angle - (pin.heading || 0)) + 360) % 360;
+    const arrow = document.createElement('button');
+    arrow.type = 'button'; arrow.className = 'nav-arrow'; arrow.title = `Go to capture (heading ${Math.round(n.angle)}°)`;
+    arrow.textContent = '➤';
+    arrow.style.left = `${18 + (rel / 360) * 64}%`;
+    arrow.style.transform = `rotate(${rel - 90}deg)`;
+    arrow.addEventListener('click', (event) => { event.stopPropagation(); openCapture(n.pin, state.project.pins.indexOf(n.pin) + 1); });
+    container.appendChild(arrow);
+  });
+}
+
+function stepViewer(direction) {
+  const pins = viewerPins(); if (!pins.length) return;
+  const currentPin = state.project.pins[state.viewerIndex];
+  const idx = pins.indexOf(currentPin);
+  const nextIdx = (idx + direction + pins.length) % pins.length;
+  const target = pins[nextIdx];
+  openCapture(target, state.project.pins.indexOf(target) + 1);
+}
+
+function updateNavButtons() {
+  const has = viewerPins().length > 1;
+  byId('prev-capture').style.display = has ? 'inline-flex' : 'none';
+  byId('next-capture').style.display = has ? 'inline-flex' : 'none';
+}
+
+function handleViewerClick(event) {
+  if (event.target.closest('.nav-arrow') || event.target.closest('button')) return;
+  const currentPin = state.project.pins[state.viewerIndex]; if (!currentPin) return;
+  const neighbors = neighborPins(currentPin); if (!neighbors.length) return;
+  const rect = byId('panorama').getBoundingClientRect();
+  const clickFrac = (event.clientX - rect.left) / rect.width;
+  const viewYaw = state.viewer && typeof state.viewer.getYaw === 'function' ? state.viewer.getYaw() : (currentPin.heading || 0);
+  const clickAngle = ((viewYaw + (clickFrac - 0.5) * 120) % 360 + 360) % 360;
+  let best = null; let bestDiff = 181;
+  neighbors.forEach((n) => {
+    const diff = Math.min(Math.abs(n.angle - clickAngle), 360 - Math.abs(n.angle - clickAngle));
+    if (diff < bestDiff) { bestDiff = diff; best = n; }
+  });
+  if (best && bestDiff < 60) openCapture(best.pin, state.project.pins.indexOf(best.pin) + 1);
 }
 
 async function loadProjects() {
@@ -293,7 +361,10 @@ byId('update-mode').addEventListener('change', (event) => {
 });
 byId('enable-sensors').addEventListener('click', enableSensors);
 byId('set-gps').addEventListener('click', () => { if (!navigator.geolocation) { byId('telemetry-status').textContent = 'GPS is not available in this browser.'; return; } navigator.geolocation.getCurrentPosition(() => { byId('telemetry-status').textContent = 'GPS is available. Click the plan to calibrate its matching starting point.'; }, () => { byId('telemetry-status').textContent = 'GPS permission was unavailable; the calibrated demo route is still ready.'; }); });
-byId('close-viewer').addEventListener('click', () => { byId('viewer-modal').classList.remove('open'); if (state.viewer) { state.viewer.destroy(); state.viewer = null; } });
+byId('close-viewer').addEventListener('click', () => { byId('viewer-modal').classList.remove('open'); clearNavArrows(); if (state.viewer) { state.viewer.destroy(); state.viewer = null; } });
+byId('prev-capture').addEventListener('click', () => stepViewer(-1));
+byId('next-capture').addEventListener('click', () => stepViewer(1));
+byId('panorama').addEventListener('click', handleViewerClick);
 byId('apply-edit').addEventListener('click', applyEdit);
 byId('cancel-edit').addEventListener('click', () => { state.editingPin = null; byId('edit-panel').style.display = 'none'; });
 loadProjects();
