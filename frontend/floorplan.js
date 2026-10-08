@@ -261,8 +261,13 @@ function openCapture(pin, number) {
 
 function clearNavArrows() { document.querySelectorAll('.nav-arrow').forEach((el) => el.remove()); }
 
-function allNeighborBearings(pin) {
-  return viewerPins().filter((p) => p.id !== pin.id).map((p) => ({ pin: p, bearing: bearingBetween(pin, p) }));
+function routeNeighbors(pin) {
+  const pins = viewerPins();
+  const idx = pins.indexOf(pin);
+  const neighbors = [];
+  if (idx > 0) neighbors.push({ pin: pins[idx - 1], dir: -1 });
+  if (idx >= 0 && idx < pins.length - 1) neighbors.push({ pin: pins[idx + 1], dir: 1 });
+  return neighbors;
 }
 
 function bearingBetween(fromPin, toPin) {
@@ -279,15 +284,16 @@ function updateNavArrow(pin) {
   clearNavArrows();
   const container = byId('panorama');
   const viewYaw = currentViewYaw(pin);
-  const hfov = 100; // approximate visible horizontal field in degrees
-  allNeighborBearings(pin).forEach(({ pin: target, bearing }) => {
+  const hfov = 90; // half-field-of-view window for arrow visibility
+  routeNeighbors(pin).forEach(({ pin: target }) => {
+    const bearing = bearingBetween(pin, target);
     const rel = ((bearing - viewYaw) % 360 + 360) % 360;
     const signed = rel > 180 ? rel - 360 : rel;
-    if (Math.abs(signed) > hfov / 2) return;
+    if (Math.abs(signed) > hfov) return; // hidden when you turn away from it
     const arrow = document.createElement('button');
     arrow.type = 'button'; arrow.className = 'nav-arrow'; arrow.title = `Go to capture (heading ${Math.round(bearing)}°)`;
     arrow.innerHTML = '<span class="tip"></span>';
-    arrow.style.left = `${50 + (signed / (hfov / 2)) * 45}%`;
+    arrow.style.left = `${50 + (signed / hfov) * 45}%`;
     arrow.querySelector('.tip').style.transform = `rotate(${signed}deg)`;
     arrow.addEventListener('click', (event) => { event.stopPropagation(); openCapture(target, state.project.pins.indexOf(target) + 1); });
     container.appendChild(arrow);
