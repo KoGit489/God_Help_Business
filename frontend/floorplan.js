@@ -261,16 +261,8 @@ function openCapture(pin, number) {
 
 function clearNavArrows() { document.querySelectorAll('.nav-arrow').forEach((el) => el.remove()); }
 
-function nearestNeighbor(pin) {
-  const others = viewerPins().filter((p) => p.id !== pin.id);
-  if (!others.length) return null;
-  let best = null; let bestDist = Infinity;
-  others.forEach((p) => {
-    const dx = p.position_x - pin.position_x; const dy = p.position_y - pin.position_y;
-    const dist = Math.sqrt(dx * dx + dy * dy);
-    if (dist < bestDist) { bestDist = dist; best = p; }
-  });
-  return best;
+function allNeighborBearings(pin) {
+  return viewerPins().filter((p) => p.id !== pin.id).map((p) => ({ pin: p, bearing: bearingBetween(pin, p) }));
 }
 
 function bearingBetween(fromPin, toPin) {
@@ -285,20 +277,21 @@ function currentViewYaw(pin) {
 
 function updateNavArrow(pin) {
   clearNavArrows();
-  const neighbor = nearestNeighbor(pin); if (!neighbor) return;
   const container = byId('panorama');
-  const targetBearing = bearingBetween(pin, neighbor);
   const viewYaw = currentViewYaw(pin);
-  const rel = ((targetBearing - viewYaw) % 360 + 360) % 360;
-  const signed = rel > 180 ? rel - 360 : rel;
-  if (Math.abs(signed) > 120) return;
-  const arrow = document.createElement('button');
-  arrow.type = 'button'; arrow.className = 'nav-arrow'; arrow.title = `Go to capture (heading ${Math.round(targetBearing)}°)`;
-  arrow.innerHTML = '<span class="tip"></span>';
-  arrow.style.left = `${50 + (signed / 120) * 40}%`;
-  arrow.querySelector('.tip').style.transform = `rotate(${signed}deg)`;
-  arrow.addEventListener('click', (event) => { event.stopPropagation(); openCapture(neighbor, state.project.pins.indexOf(neighbor) + 1); });
-  container.appendChild(arrow);
+  const hfov = 100; // approximate visible horizontal field in degrees
+  allNeighborBearings(pin).forEach(({ pin: target, bearing }) => {
+    const rel = ((bearing - viewYaw) % 360 + 360) % 360;
+    const signed = rel > 180 ? rel - 360 : rel;
+    if (Math.abs(signed) > hfov / 2) return;
+    const arrow = document.createElement('button');
+    arrow.type = 'button'; arrow.className = 'nav-arrow'; arrow.title = `Go to capture (heading ${Math.round(bearing)}°)`;
+    arrow.innerHTML = '<span class="tip"></span>';
+    arrow.style.left = `${50 + (signed / (hfov / 2)) * 45}%`;
+    arrow.querySelector('.tip').style.transform = `rotate(${signed}deg)`;
+    arrow.addEventListener('click', (event) => { event.stopPropagation(); openCapture(target, state.project.pins.indexOf(target) + 1); });
+    container.appendChild(arrow);
+  });
 }
 
 function stepViewer(direction) {
@@ -318,13 +311,6 @@ function updateNavButtons() {
 
 function handleViewerClick(event) {
   if (event.target.closest('.nav-arrow') || event.target.closest('button')) return;
-  const currentPin = state.project.pins[state.viewerIndex]; if (!currentPin) return;
-  const neighbor = nearestNeighbor(currentPin); if (!neighbor) return;
-  const targetBearing = bearingBetween(currentPin, neighbor);
-  const viewYaw = currentViewYaw(currentPin);
-  const rel = ((targetBearing - viewYaw) % 360 + 360) % 360;
-  const signed = rel > 180 ? rel - 360 : rel;
-  if (Math.abs(signed) <= 120) openCapture(neighbor, state.project.pins.indexOf(neighbor) + 1);
 }
 
 async function loadProjects() {
