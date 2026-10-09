@@ -9,7 +9,7 @@ function buildApiBases() {
 }
 
 const apiBases = buildApiBases();
-const state = { project: null, plan: null, start: null, current: null, distance: 0, heading: 0, viewer: null, timer: null, calibrationPin: null, annotationMode: false, annotations: [], editingPin: null, viewerIndex: -1 };
+const state = { project: null, plan: null, start: null, current: null, distance: 0, heading: 0, viewer: null, timer: null, calibrationPin: null, annotationMode: false, annotations: [], editingPin: null, viewerIndex: -1, navHistory: [], navRaf: null, viewerPin: null };
 const byId = (id) => document.getElementById(id);
 
 function setStatus(text) { byId('plan-status').textContent = text; }
@@ -243,31 +243,41 @@ function openCapture(pin, number) {
   const pins = viewerPins();
   const listIndex = state.project.pins.indexOf(pin);
   state.viewerIndex = listIndex;
+  state.viewerPin = pin;
+  trackNavHistory(pin);
   byId('viewer-title').textContent = `Capture #${number} · heading ${pin.heading || 0}°`;
   byId('viewer-modal').classList.add('open');
   const imageUrl = mediaUrl(pin.photo_key || pin.thumbnail_key) || (pin.preview_url || null);
   byId('plain-preview').style.display = 'none'; byId('panorama').style.display = 'block';
   if (state.viewer) { state.viewer.destroy(); state.viewer = null; }
-  clearNavArrows();
+  stopArrowLoop(); clearNavArrows();
   if (imageUrl && window.pannellum && pin.media_type === 'insta360') {
-    state.viewer = pannellum.viewer('panorama', { type: 'equirectangular', panorama: imageUrl, autoLoad: true, yaw: pin.heading || 0, horizon: 0, haov: 360, vaov: 180, minYaw: -180, maxYaw: 180, wrap: true });
-    if (typeof state.viewer.on === 'function') { state.viewer.on('animate', () => updateNavArrow(pin)); }
-    updateNavArrow(pin);
+    state.viewer = pannellum.viewer('panorama', { type: 'equirectangular', panorama: imageUrl, autoLoad: true, yaw: pin.heading || 0 });
+    startArrowLoop();
   }
-  else if (imageUrl) { byId('panorama').style.display = 'none'; byId('plain-preview').src = imageUrl; byId('plain-preview').style.display = 'block'; updateNavArrow(pin); }
+  else if (imageUrl) { byId('panorama').style.display = 'none'; byId('plain-preview').src = imageUrl; byId('plain-preview').style.display = 'block'; updateNavArrows(pin); }
   else { byId('panorama').innerHTML = '<div style="color:white;padding:4rem 1rem;text-align:center">No preview image yet. Upload a preview photo, or save the waypoint with its original .insp/.insv file and the app will generate one automatically.</div>'; }
   updateNavButtons();
 }
 
+function trackNavHistory(pin) {
+  const h = state.navHistory;
+  if (h.length >= 2 && h[h.length - 2] === pin.id) { h.pop(); return; }
+  if (h[h.length - 1] !== pin.id) h.push(pin.id);
+}
+
 function clearNavArrows() { document.querySelectorAll('.nav-arrow').forEach((el) => el.remove()); }
 
-function routeNeighbors(pin) {
+function navTargets(pin) {
   const pins = viewerPins();
+  const targets = [];
+  const backId = state.navHistory.length >= 2 ? state.navHistory[state.navHistory.length - 2] : null;
+  const backPin = backId ? pins.find((p) => p.id === backId) : null;
+  if (backPin) targets.push({ pin: backPin, back: true });
   const idx = pins.indexOf(pin);
-  const neighbors = [];
-  if (idx > 0) neighbors.push({ pin: pins[idx - 1], dir: -1 });
-  if (idx >= 0 && idx < pins.length - 1) neighbors.push({ pin: pins[idx + 1], dir: 1 });
-  return neighbors;
+  const nextPin = (idx >= 0 && idx < pins.length - 1) ? pins[idx + 1] : null;
+  if (nextPin && (!backPin || nextPin.id !== backPin.id)) targets.push({ pin: nextPin, back: false });
+  return targets;
 }
 
 function bearingBetween(fromPin, toPin) {
@@ -280,25 +290,37 @@ function currentViewYaw(pin) {
   return pin.heading || 0;
 }
 
-function updateNavArrow(pin) {
+function updateNavArrows(pin) {
   clearNavArrows();
   const container = byId('panorama');
   const viewYaw = currentViewYaw(pin);
-  const hfov = 90; // half-field-of-view window for arrow visibility
-  routeNeighbors(pin).forEach(({ pin: target }) => {
+  const halfFov = 90;
+  navTargets(pin).forEach(({ pin: target, back }) => {
     const bearing = bearingBetween(pin, target);
     const rel = ((bearing - viewYaw) % 360 + 360) % 360;
     const signed = rel > 180 ? rel - 360 : rel;
-    if (Math.abs(signed) > hfov) return; // hidden when you turn away from it
+    if (Math.abs(signed) > halfFov) return;
     const arrow = document.createElement('button');
-    arrow.type = 'button'; arrow.className = 'nav-arrow'; arrow.title = `Go to capture (heading ${Math.round(bearing)}°)`;
+    arrow.type = 'button'; arrow.className = `nav-arrow${back ? ' back' : ''}`; arrow.title = back ? 'Back to previous capture' : `Go to capture (heading ${Math.round(bearing)}°)`;
     arrow.innerHTML = '<span class="tip"></span>';
-    arrow.style.left = `${50 + (signed / hfov) * 45}%`;
+    arrow.style.left = `${50 + (signed / halfFov) * 45}%`;
     arrow.querySelector('.tip').style.transform = `rotate(${signed}deg)`;
     arrow.addEventListener('click', (event) => { event.stopPropagation(); openCapture(target, state.project.pins.indexOf(target) + 1); });
     container.appendChild(arrow);
   });
 }
+
+function startArrowLoop() {
+  stopArrowLoop();
+  const tick = () => {
+    if (!byId('viewer-modal').classList.contains('open') || !state.viewerPin) return;
+    updateNavArrows(state.viewerPin);
+    state.navRaf = requestAnimationFrame(tick);
+  };
+  state.navRaf = requestAnimationFrame(tick);
+}
+
+function stopArrowLoop() { if (state.navRaf) { cancelAnimationFrame(state.navRaf); state.navRaf = null; } }
 
 function stepViewer(direction) {
   const pins = viewerPins(); if (!pins.length) return;
@@ -364,7 +386,7 @@ byId('update-mode').addEventListener('change', (event) => {
 });
 byId('enable-sensors').addEventListener('click', enableSensors);
 byId('set-gps').addEventListener('click', () => { if (!navigator.geolocation) { byId('telemetry-status').textContent = 'GPS is not available in this browser.'; return; } navigator.geolocation.getCurrentPosition(() => { byId('telemetry-status').textContent = 'GPS is available. Click the plan to calibrate its matching starting point.'; }, () => { byId('telemetry-status').textContent = 'GPS permission was unavailable; the calibrated demo route is still ready.'; }); });
-byId('close-viewer').addEventListener('click', () => { byId('viewer-modal').classList.remove('open'); clearNavArrows(); if (state.viewer) { state.viewer.destroy(); state.viewer = null; } });
+byId('close-viewer').addEventListener('click', () => { byId('viewer-modal').classList.remove('open'); stopArrowLoop(); clearNavArrows(); state.viewerPin = null; if (state.viewer) { state.viewer.destroy(); state.viewer = null; } });
 byId('prev-capture').addEventListener('click', () => stepViewer(-1));
 byId('next-capture').addEventListener('click', () => stepViewer(1));
 byId('panorama').addEventListener('click', handleViewerClick);
