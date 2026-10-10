@@ -19,6 +19,8 @@
       .plan-stage canvas { display: block; max-width: min(100%, 1000px); max-height: 70vh; width: 100%; height: auto; background: white; }
       .plan-empty { min-height: 400px; display: grid; place-items: center; text-align: center; color: var(--muted); font-size: 1rem; padding: 2rem; }
       #waypoint-layer { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
+      #plan-overlay { position: absolute; inset: 0; z-index: 1; }
+      .plan-stage iframe { display: block; }
       .waypoint { position: absolute; width: 12px; height: 12px; min-width: 0; min-height: 0; padding: 0; transform: translate(-50%, -50%); border: 0; border-radius: 50%; background: var(--gold-dark); box-shadow: 0 0 0 1.5px #fff; cursor: pointer; z-index: 3; pointer-events: auto; }
       .waypoint::before { content: ""; position: absolute; inset: -12px; border-radius: 50%; }
       .waypoint.current { width: 8px; height: 8px; background: var(--ink); animation: pulse 1.5s infinite; }
@@ -137,6 +139,6 @@
       <div class="viewer-nav"><button id="prev-capture" class="secondary" type="button">◀ Previous capture</button><button id="next-capture" class="secondary" type="button">Next capture ▶</button></div></div>
     </div>
     <script src="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.js"></script>
-    <script src="floorplan.js?v=10"></script>
+    <script src="floorplan.js?v=11"></script>
   </body>
 </html>
