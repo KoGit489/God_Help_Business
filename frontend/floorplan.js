@@ -65,25 +65,26 @@ function renderPlan() {
 
 function renderWaypoints() {
   const layer = byId('waypoint-layer');
-  if (!layer) return;
-  layer.innerHTML = '';
-  (state.project?.pins || []).forEach((pin, index) => {
-    if (pin.position_x == null || pin.position_y == null) return;
-    const dot = document.createElement('button');
-    dot.type = 'button'; dot.className = `waypoint ${pin.calibration_state === 'manually_verified' ? 'verified' : ''}`; dot.dataset.label = `#${index + 1}`;
-    dot.style.left = `${pin.position_x * 100}%`; dot.style.top = `${pin.position_y * 100}%`;
-    dot.title = `Open capture ${index + 1}`;
-    dot.addEventListener('click', (event) => { event.stopPropagation(); event.preventDefault(); openCapture(pin, index + 1); });
-    layer.appendChild(dot);
-  });
-  state.annotations.forEach((annotation, index) => {
-    const dot = document.createElement('div'); dot.className = 'waypoint annotation-dot'; dot.dataset.label = `N${index + 1}`;
-    dot.style.left = `${annotation.floor_plan_x * 100}%`; dot.style.top = `${annotation.floor_plan_y * 100}%`; dot.title = annotation.body;
-    layer.appendChild(dot);
-  });
-  if (state.current && !state.current.saved) {
-    const current = document.createElement('div'); current.className = 'waypoint current'; current.dataset.label = 'Current';
-    current.style.left = `${state.current.x * 100}%`; current.style.top = `${state.current.y * 100}%`; layer.appendChild(current);
+  if (layer) {
+    layer.innerHTML = '';
+    (state.project?.pins || []).forEach((pin, index) => {
+      if (pin.position_x == null || pin.position_y == null) return;
+      const dot = document.createElement('button');
+      dot.type = 'button'; dot.className = `waypoint ${pin.calibration_state === 'manually_verified' ? 'verified' : ''}`; dot.dataset.label = `#${index + 1}`;
+      dot.style.left = `${pin.position_x * 100}%`; dot.style.top = `${pin.position_y * 100}%`;
+      dot.title = `Open capture ${index + 1}`;
+      dot.addEventListener('click', (event) => { event.stopPropagation(); event.preventDefault(); openCapture(pin, index + 1); });
+      layer.appendChild(dot);
+    });
+    state.annotations.forEach((annotation, index) => {
+      const dot = document.createElement('div'); dot.className = 'waypoint annotation-dot'; dot.dataset.label = `N${index + 1}`;
+      dot.style.left = `${annotation.floor_plan_x * 100}%`; dot.style.top = `${annotation.floor_plan_y * 100}%`; dot.title = annotation.body;
+      layer.appendChild(dot);
+    });
+    if (state.current && !state.current.saved) {
+      const current = document.createElement('div'); current.className = 'waypoint current'; current.dataset.label = 'Current';
+      current.style.left = `${state.current.x * 100}%`; current.style.top = `${state.current.y * 100}%`; layer.appendChild(current);
+    }
   }
   byId('waypoint-count').textContent = String((state.project?.pins || []).filter((pin) => pin.position_x != null).length);
   renderWaypointList();
@@ -262,8 +263,7 @@ function openCapture(pin, number) {
   if (state.viewer) { state.viewer.destroy(); state.viewer = null; }
   stopArrowLoop(); clearNavArrows();
   if (imageUrl && window.pannellum && pin.media_type === 'insta360') {
-    state.viewer = pannellum.viewer('panorama', { type: 'equirectangular', panorama: imageUrl, autoLoad: true, yaw: pin.heading || 0 });
-    startArrowLoop();
+    state.viewer = pannellum.viewer('panorama', { type: 'equirectangular', panorama: imageUrl, autoLoad: true, yaw: pin.heading || 0, hotSpots: buildNavHotspots(pin) });
   }
   else if (imageUrl) { byId('panorama').style.display = 'none'; byId('plain-preview').src = imageUrl; byId('plain-preview').style.display = 'block'; updateNavArrows(pin); }
   else { byId('panorama').innerHTML = '<div style="color:white;padding:4rem 1rem;text-align:center">No preview image yet. Upload a preview photo, or save the waypoint with its original .insp/.insv file and the app will generate one automatically.</div>'; }
@@ -288,6 +288,28 @@ function navTargets(pin) {
   const nextPin = (idx >= 0 && idx < pins.length - 1) ? pins[idx + 1] : null;
   if (nextPin && (!backPin || nextPin.id !== backPin.id)) targets.push({ pin: nextPin, back: false });
   return targets;
+}
+
+function buildNavHotspots(pin) {
+  return navTargets(pin).map(({ pin: target, back }) => {
+    const bearing = bearingBetween(pin, target);
+    const yaw = ((bearing + 180) % 360 + 360) % 360 - 180;
+    return {
+      yaw: yaw,
+      pitch: -22,
+      type: 'custom',
+      cssClass: back ? 'nav-hotspot back' : 'nav-hotspot',
+      createTooltipFunc: createFloorArrow,
+      createTooltipArgs: back,
+      clickHandlerFunc: () => openCapture(target, state.project.pins.indexOf(target) + 1),
+    };
+  });
+}
+
+function createFloorArrow(div) {
+  const arrow = document.createElement('span');
+  arrow.className = 'floor-arrow';
+  div.appendChild(arrow);
 }
 
 function bearingBetween(fromPin, toPin) {
