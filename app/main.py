@@ -378,6 +378,18 @@ def _store_floor_plan(project_id: str, upload: UploadFile) -> str:
     upload.file.seek(0)
     with output_file.open("wb") as handle:
         shutil.copyfileobj(upload.file, handle)
+    if filename.lower().endswith(".pdf"):
+        try:
+            import pymupdf
+            doc = pymupdf.open(str(output_file))
+            page = doc.load_page(0)
+            pixmap = page.get_pixmap(dpi=150)
+            png_name = f"{Path(filename).stem}.png"
+            pixmap.save(str(destination / png_name))
+            doc.close()
+            return f"floorplans/{project_id}/{png_name}"
+        except Exception as exc:
+            logger.warning("PDF rasterization failed, keeping original: %s", exc)
     return f"floorplans/{project_id}/{filename}"
 
 
@@ -1338,10 +1350,10 @@ def upload_floor_plan(project_id: str, request: Request, file: UploadFile = File
 
     media_key = _store_floor_plan(project_id, file)
     return FloorPlanUploadResponse(
-        filename=Path(file.filename).name,
+        filename=Path(media_key).name,
         media_key=media_key,
         media_url=f"/media/{media_key}",
-        content_type=file.content_type,
+        content_type="image/png" if media_key.endswith(".png") else file.content_type,
     )
 
 

@@ -241,6 +241,31 @@ def test_browser_frontend_and_cors_are_available() -> None:
     assert preflight.headers.get("access-control-allow-origin") in {"*", "http://192.168.1.10:8000"}
 
 
+def test_pdf_floor_plan_upload_is_rasterized_to_png() -> None:
+    reset_demo_store()
+
+    from PIL import Image
+    import io
+
+    buf = io.BytesIO()
+    Image.new("RGB", (800, 600), (240, 240, 235)).save(buf, format="PDF")
+    buf.seek(0)
+
+    project = client.post("/projects", json={"title": "PDF Plan Demo"}).json()
+    upload = client.post(
+        f"/projects/{project['id']}/floor-plan-upload",
+        files={"file": ("plan.pdf", buf.getvalue(), "application/pdf")},
+    )
+    assert upload.status_code == 200
+    payload = upload.json()
+    assert payload["media_url"].endswith(".png")
+    assert payload["content_type"] == "image/png"
+
+    media_response = client.get(payload["media_url"])
+    assert media_response.status_code == 200
+    assert len(media_response.content) > 100
+
+
 def test_floor_plan_upload_and_pin_position_are_available() -> None:
     reset_demo_store()
 
