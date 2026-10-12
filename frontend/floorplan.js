@@ -281,10 +281,11 @@ function clearNavArrows() { document.querySelectorAll('.nav-arrow').forEach((el)
 function navTargets(pin) {
   const pins = viewerPins();
   const targets = [];
-  const backId = state.navHistory.length >= 2 ? state.navHistory[state.navHistory.length - 2] : null;
-  const backPin = backId ? pins.find((p) => p.id === backId) : null;
-  if (backPin) targets.push({ pin: backPin, back: true });
   const idx = pins.indexOf(pin);
+  const prevPin = idx > 0 ? pins[idx - 1] : null;
+  const backId = state.navHistory.length >= 2 ? state.navHistory[state.navHistory.length - 2] : null;
+  const backPin = (backId ? pins.find((p) => p.id === backId) : null) || prevPin;
+  if (backPin) targets.push({ pin: backPin, back: true });
   const nextPin = (idx >= 0 && idx < pins.length - 1) ? pins[idx + 1] : null;
   if (nextPin && (!backPin || nextPin.id !== backPin.id)) targets.push({ pin: nextPin, back: false });
   return targets;
