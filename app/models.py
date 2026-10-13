@@ -31,7 +31,13 @@ class PinRecord(Base):
     heading: Mapped[float] = mapped_column(Float, nullable=False)
     position_x: Mapped[float | None] = mapped_column(Float, nullable=True)
     position_y: Mapped[float | None] = mapped_column(Float, nullable=True)
+    auto_position_x: Mapped[float | None] = mapped_column(Float, nullable=True)
+    auto_position_y: Mapped[float | None] = mapped_column(Float, nullable=True)
+    alignment_confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     telemetry_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    waypoints_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    calibration_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    preview_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
     processing_status: Mapped[str] = mapped_column(String(64), nullable=False, default="not_requested")
     processing_error: Mapped[str | None] = mapped_column(String(500), nullable=True)
     captured_on: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -41,6 +47,20 @@ class PinRecord(Base):
     thumbnail_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     project: Mapped[ProjectRecord] = relationship(back_populates="pins")
+
+
+class AnnotationRecord(Base):
+    __tablename__ = "annotations"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(64), ForeignKey("projects.id"), nullable=False)
+    pin_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("pins.id"), nullable=True)
+    author_id: Mapped[str] = mapped_column(String(128), nullable=False, default="demo-user")
+    body: Mapped[str] = mapped_column(String(1000), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="open")
+    assigned_to: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    floor_plan_x: Mapped[float] = mapped_column(Float, nullable=False)
+    floor_plan_y: Mapped[float] = mapped_column(Float, nullable=False)
 
 
 class ShareLinkRecord(Base):

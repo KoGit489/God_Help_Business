@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>CASAI Project Review</title>
     <link rel="icon" href="assets/logo.png" type="image/png" />
-    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="styles.css?v=3" />
     <style>
       .app-shell { max-width: 620px; }
       .grid { display: grid; gap: 1rem; }
@@ -68,7 +68,10 @@
             <h1>Project review</h1>
           </div>
         </div>
-        <a href="index.html"><button class="quiet" type="button">Back to dashboard</button></a>
+        <nav class="site-nav">
+          <a href="floorplan.html"><button class="secondary" type="button">Floor plan walkthrough</button></a>
+          <a href="index.html"><button class="quiet" type="button">Back to dashboard</button></a>
+        </nav>
       </header>
       <div class="card">
       <p>This page gives the project a clearer review view so captured pins can be reviewed, shared, and presented more clearly.</p>
@@ -106,6 +109,6 @@
         <ul id="review-pins"></ul>
       </div>
     </div>
-    <script src="review.js"></script>
+    <script src="review.js?v=2"></script>
   </body>
 </html>

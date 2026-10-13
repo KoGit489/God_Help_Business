@@ -16,25 +16,48 @@
       .plan-wrap { position: relative; min-height: 520px; display: grid; place-items: center; overflow: auto; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 0.75rem; }
       .plan-stage { position: relative; display: inline-block; max-width: 100%; line-height: 0; }
       .plan-stage img { display: block; max-width: min(100%, 1000px); max-height: 70vh; width: auto; height: auto; background: white; }
+      .plan-stage canvas { display: block; max-width: min(100%, 1000px); max-height: 70vh; width: 100%; height: auto; background: white; }
       .plan-empty { min-height: 400px; display: grid; place-items: center; text-align: center; color: var(--muted); font-size: 1rem; padding: 2rem; }
       #waypoint-layer { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
-      .waypoint { position: absolute; width: 28px; height: 28px; transform: translate(-50%, -50%); border: 3px solid white; border-radius: 50%; background: var(--gold-dark); box-shadow: 0 3px 10px rgba(20, 23, 26, 0.35); cursor: pointer; z-index: 3; pointer-events: auto; }
-      .waypoint.current { width: 34px; height: 34px; background: var(--ink); animation: pulse 1.5s infinite; }
-      .waypoint::after { content: attr(data-label); position: absolute; left: 18px; top: 24px; white-space: nowrap; color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 0.2rem 0.35rem; font-size: 0.72rem; font-weight: 700; }
-      @keyframes pulse { 50% { box-shadow: 0 0 0 8px rgba(20, 23, 26, 0.14); } }
+      #plan-overlay { position: absolute; inset: 0; z-index: 1; }
+      .plan-stage iframe { display: block; }
+      .waypoint { position: absolute; width: 12px; height: 12px; min-width: 0; min-height: 0; padding: 0; transform: translate(-50%, -50%); border: 0; border-radius: 50%; background: var(--gold-dark); box-shadow: 0 0 0 1.5px #fff; cursor: pointer; z-index: 3; pointer-events: auto; }
+      .waypoint::before { content: ""; position: absolute; inset: -12px; border-radius: 50%; }
+      .waypoint.current { width: 8px; height: 8px; background: var(--ink); animation: pulse 1.5s infinite; }
+      .waypoint::after { content: attr(data-label); position: absolute; left: 10px; top: 6px; white-space: nowrap; color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 0.2rem 0.35rem; font-size: 0.72rem; font-weight: 700; }
+      @keyframes pulse { 50% { box-shadow: 0 0 0 4px rgba(20, 23, 26, 0.18); } }
+      .heading-ticks { display: flex; justify-content: space-between; font-size: 0.72rem; font-weight: 700; color: var(--muted); padding: 0 2px; }
+      .heading-live { display: inline-block; margin-left: 0.5rem; padding: 0.15rem 0.5rem; border-radius: var(--radius-sm); background: var(--gold-tint); color: var(--gold-dark); font-weight: 700; font-size: 0.85rem; }
       .readout { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.45rem; }
       .readout div { background: var(--bg); border-radius: var(--radius-sm); padding: 0.55rem; text-align: center; font-size: 0.78rem; font-weight: 700; color: var(--gold-dark); }
       .status { min-height: 1.4rem; color: var(--muted); font-size: 0.86rem; }
       .waypoint-list { max-height: 230px; overflow: auto; padding: 0; margin: 0; list-style: none; }
       .waypoint-list li { border-top: 1px solid var(--border); padding: 0.6rem 0; }
       .waypoint-list button { min-height: 0; padding: 0.35rem; background: transparent; border: 0; color: var(--gold-dark); text-align: left; font-weight: 700; }
+      .calibration-list { display: grid; gap: 0.5rem; padding: 0; margin: 0; list-style: none; }
+      .calibration-item { display: grid; grid-template-columns: 1fr auto; gap: 0.5rem; align-items: center; border-top: 1px solid var(--border); padding-top: 0.55rem; }
+      .calibration-item small { display: block; color: var(--muted); }
+      .calibration-item button { min-height: 0; padding: 0.35rem 0.5rem; font-size: 0.75rem; }
+      .annotation-list { display: grid; gap: 0.5rem; padding: 0; margin: 0; list-style: none; }
+      .annotation-item { border-top: 1px solid var(--border); padding-top: 0.55rem; }
+      .annotation-dot { background: var(--danger); }
       .small { color: var(--muted); font-size: 0.8rem; }
       .modal { position: fixed; inset: 0; display: none; place-items: center; padding: 1rem; background: rgba(20, 23, 26, 0.78); z-index: 5; }
       .modal.open { display: grid; }
       .viewer { width: min(100%, 920px); background: var(--ink); border-radius: var(--radius-md); padding: 0.75rem; }
       .viewer-head { display: flex; justify-content: space-between; align-items: center; gap: 1rem; color: white; padding-bottom: 0.6rem; font-size: 0.9rem; font-weight: 700; }
-      #panorama { width: 100%; height: min(65vh, 560px); }
+      #panorama { width: 100%; height: min(65vh, 560px); position: relative; }
       #plain-preview { display: none; max-width: 100%; max-height: 65vh; margin: auto; }
+      .nav-arrow { position: absolute; top: 50%; z-index: 6; min-width: 0; min-height: 0; width: 0; height: 0; padding: 0; border: 0; background: transparent; cursor: pointer; transform: translate(-50%, -50%); }
+      .nav-arrow .tip { display: block; width: 0; height: 0; border-left: 16px solid transparent; border-right: 16px solid transparent; border-bottom: 30px solid var(--gold); filter: drop-shadow(0 0 6px rgba(242,182,50,0.9)) drop-shadow(0 2px 3px rgba(0,0,0,0.5)); transition: transform 0.15s ease; }
+      .nav-arrow:hover .tip { border-bottom-color: #ffd257; }
+      .nav-arrow.back .tip { border-bottom-color: #ffffff; filter: drop-shadow(0 0 6px rgba(255,255,255,0.9)) drop-shadow(0 2px 3px rgba(0,0,0,0.5)); }
+      .pnlm-hotspot-base.nav-hotspot { background: transparent; border: 0; cursor: pointer; }
+      .pnlm-hotspot-base.nav-hotspot .floor-arrow { display: block; width: 46px; height: 72px; background: var(--gold); clip-path: polygon(50% 0%, 100% 38%, 66% 38%, 66% 100%, 34% 100%, 34% 38%, 0% 38%); transform: perspective(150px) rotateX(64deg); transform-origin: 50% 100%; filter: drop-shadow(0 0 9px rgba(242,182,50,0.85)) drop-shadow(0 3px 4px rgba(0,0,0,0.5)); }
+      .pnlm-hotspot-base.nav-hotspot.back .floor-arrow { background: #ffffff; filter: drop-shadow(0 0 9px rgba(255,255,255,0.85)) drop-shadow(0 3px 4px rgba(0,0,0,0.5)); }
+      .viewer-nav { display: flex; justify-content: space-between; gap: 0.5rem; padding-top: 0.6rem; }
+      .viewer-nav button { min-height: 0; padding: 0.4rem 0.8rem; font-size: 0.8rem; }
+      #panorama .pnlm-render-container { overflow: hidden; }
       @media (max-width: 800px) { .layout { grid-template-columns: 1fr; } .plan-wrap { min-height: 360px; } .plan-stage img { max-height: 56vh; } }
       @media (max-width: 480px) { .shell { padding: 0.7rem; } .controls { grid-template-columns: 1fr; } .full { grid-column: auto; } }
     </style>
@@ -49,7 +72,11 @@
             <h1>Floor plan walkthrough</h1>
           </div>
         </div>
-        <a href="index.html"><button class="quiet" type="button">Back to dashboard</button></a>
+        <nav class="site-nav">
+          <a href="map.html"><button class="secondary" type="button">Capture view</button></a>
+          <a href="review.html"><button class="secondary" type="button">Review view</button></a>
+          <a href="index.html"><button class="quiet" type="button">Back to dashboard</button></a>
+        </nav>
       </header>
       <p class="small" style="margin: -0.75rem 0 1rem;">Calibrate a drawing, walk a route, and leave clickable capture points for remote review.</p>
       <div class="layout">
@@ -63,7 +90,7 @@
           </div>
           <div id="plan-status" class="status">Choose a project and upload a floor plan to begin.</div>
           <div id="plan-wrap" class="plan-wrap"><div class="plan-empty">Your floor plan will appear here.<br />For clickable waypoints, upload a JPG or PNG export of the plan.</div></div>
-          <div class="readout"><div>Route<br /><span id="route-distance">0.0 ft</span></div><div>Waypoints<br /><span id="waypoint-count">0</span></div><div>Heading<br /><span id="heading-value">0°</span></div></div>
+          <div class="readout"><div>Route<br /><span id="route-distance">0.0 ft</span></div><div>Waypoints<br /><span id="waypoint-count">0</span></div><div>Heading<br /><span id="heading-value">0° N</span></div></div>
         </section>
         <aside class="stack">
           <section class="panel stack">
@@ -71,7 +98,8 @@
             <p class="small">Click the drawing to set the starting point. Then use the walk controls to move across the plan.</p>
             <button id="set-gps" class="secondary" type="button">Use current GPS location</button>
             <button id="enable-sensors" class="quiet" type="button">Enable device heading</button>
-            <label>Heading <input id="heading" type="range" min="0" max="359" value="0" /></label>
+            <label>Heading <span id="heading-live" class="heading-live">0° N</span><input id="heading" type="range" min="0" max="359" value="0" /></label>
+            <div class="heading-ticks"><span>0° N</span><span>90° E</span><span>180° S</span><span>270° W</span></div>
             <label>Walk distance (feet)<input id="step-distance" type="number" min="0.1" step="0.1" value="1" /></label>
             <button id="walk-step" type="button" disabled>Walk one step</button>
             <div id="telemetry-status" class="small">GPS and device sensors are optional. The demo route uses calibrated dead reckoning when they are unavailable.</div>
@@ -80,20 +108,40 @@
             <h2>2. Save a capture</h2>
             <p class="small">Save a placeholder at the current position, then attach the preview image and original `.insp` file.</p>
             <label>Preview image<input id="photo-file" type="file" accept="image/*" /></label>
-            <label>Original ONE X2 file<input id="native-file" type="file" accept=".insp,.zip,application/octet-stream,image/*" /></label>
+            <label>Original Insta360 X6 file<input id="native-file" type="file" accept=".insp,.insv,.zip,application/octet-stream,image/*" /></label>
             <button id="save-waypoint" class="secondary" type="button" disabled>Save waypoint here</button>
           </section>
           <section class="panel">
             <h2>Saved waypoints</h2>
             <ul id="waypoint-list" class="waypoint-list"><li class="small">No waypoints yet.</li></ul>
           </section>
+          <section class="panel stack" id="edit-panel" style="display:none;">
+            <h2>Edit waypoint <span id="edit-waypoint-label"></span></h2>
+            <label>Replace photo<input id="edit-photo-file" type="file" accept="image/*" /></label>
+            <button id="apply-edit" class="secondary" type="button">Save changes</button>
+            <button id="cancel-edit" class="quiet" type="button">Cancel</button>
+          </section>
+          <section class="panel stack">
+            <h2>Calibration review</h2>
+            <p class="small">Auto-placed captures remain editable. Choose a pin, then click its verified location on the drawing.</p>
+            <ul id="calibration-list" class="calibration-list"><li class="small">No auto-placed captures yet.</li></ul>
+          </section>
+          <section class="panel stack">
+            <h2>Plan notes</h2>
+            <p class="small">Add a note, then click the exact location on the drawing.</p>
+            <input id="annotation-body" maxlength="1000" placeholder="What needs attention?" />
+            <select id="annotation-pin"><option value="">General plan note</option></select>
+            <button id="add-annotation" class="secondary" type="button">Place note on plan</button>
+            <ul id="annotation-list" class="annotation-list"><li class="small">No notes yet.</li></ul>
+          </section>
         </aside>
       </div>
     </main>
     <div id="viewer-modal" class="modal" role="dialog" aria-modal="true" aria-label="360 capture viewer">
-      <div class="viewer"><div class="viewer-head"><span id="viewer-title">Capture</span><button id="close-viewer" class="quiet" type="button">Close</button></div><div id="panorama"></div><img id="plain-preview" alt="Capture preview" /></div>
+      <div class="viewer"><div class="viewer-head"><span id="viewer-title">Capture</span><button id="close-viewer" class="quiet" type="button">Close</button></div><div id="panorama"></div><img id="plain-preview" alt="Capture preview" />
+      <div class="viewer-nav"><button id="prev-capture" class="secondary" type="button">◀ Previous capture</button><button id="next-capture" class="secondary" type="button">Next capture ▶</button></div></div>
     </div>
     <script src="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.js"></script>
-    <script src="floorplan.js"></script>
+    <script src="floorplan.js?v=14"></script>
   </body>
 </html>
