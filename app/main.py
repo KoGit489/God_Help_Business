@@ -1299,6 +1299,24 @@ def process_pin_capture(project_id: str, pin_id: str, request: Request) -> dict[
                     if preview_result.get("preview_available") and preview_result.get("preview_data"):
                         preview_key = _store_preview(project_id, pin_id, preview_result["preview_data"])
                         pin.preview_key = preview_key
+                    if native_file_path.suffix.lower() in {".insv", ".mp4"} and capture_processor.provider == "slam":
+                        slam_result = capture_processor.run_slam_pipeline(video_path=native_file_path)
+                        if slam_result.get("available") and slam_result.get("poses"):
+                            slam_telemetry = {
+                                "source": "slam",
+                                "route": [{"x": p["x"], "y": p["y"], "z": 0.0, "yaw": p["heading"], "pitch": 0.0, "roll": 0.0, "speed_mps": 0.0, "time": None} for p in slam_result["poses"]],
+                                "motion": {"samples": slam_result["pose_count"], "average_speed_mps": 0.0, "max_speed_mps": 0.0},
+                                "confidence": slam_result["confidence"],
+                            }
+                            waypoint_result = capture_processor.estimate_route_waypoints(slam_telemetry)
+                            if waypoint_result.get("waypoints"):
+                                pin.waypoints_json = json.dumps(waypoint_result)
+                                calibration_result = capture_processor.calibrate_to_floor_plan(waypoint_result)
+                                pin.auto_position_x = calibration_result.get("auto_position_x")
+                                pin.auto_position_y = calibration_result.get("auto_position_y")
+                                pin.alignment_confidence = calibration_result.get("alignment_confidence", 0.0)
+                                pin.calibration_json = json.dumps(calibration_result)
+                                result["slam"] = {"pose_count": slam_result["pose_count"], "loop_closures": len(slam_result["loop_closures"]), "optimized": slam_result["optimized"]}
             
             db.commit()
             return result
@@ -1329,6 +1347,23 @@ def process_pin_capture(project_id: str, pin_id: str, request: Request) -> dict[
             if preview_result.get("preview_available") and preview_result.get("preview_data"):
                 preview_key = _store_preview(project_id, pin_id, preview_result["preview_data"])
                 pin["preview_key"] = preview_key
+            if native_file_path.suffix.lower() in {".insv", ".mp4"} and capture_processor.provider == "slam":
+                slam_result = capture_processor.run_slam_pipeline(video_path=native_file_path)
+                if slam_result.get("available") and slam_result.get("poses"):
+                    slam_telemetry = {
+                        "source": "slam",
+                        "route": [{"x": p["x"], "y": p["y"], "z": 0.0, "yaw": p["heading"], "pitch": 0.0, "roll": 0.0, "speed_mps": 0.0, "time": None} for p in slam_result["poses"]],
+                        "motion": {"samples": slam_result["pose_count"], "average_speed_mps": 0.0, "max_speed_mps": 0.0},
+                        "confidence": slam_result["confidence"],
+                    }
+                    waypoint_result = capture_processor.estimate_route_waypoints(slam_telemetry)
+                    if waypoint_result.get("waypoints"):
+                        pin["waypoints"] = waypoint_result.get("waypoints", [])
+                        calibration_result = capture_processor.calibrate_to_floor_plan(waypoint_result)
+                        pin["auto_position_x"] = calibration_result.get("auto_position_x")
+                        pin["auto_position_y"] = calibration_result.get("auto_position_y")
+                        pin["alignment_confidence"] = calibration_result.get("alignment_confidence", 0.0)
+                        result["slam"] = {"pose_count": slam_result["pose_count"], "loop_closures": len(slam_result["loop_closures"]), "optimized": slam_result["optimized"]}
     
     return result
 

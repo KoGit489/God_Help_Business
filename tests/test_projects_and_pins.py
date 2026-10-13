@@ -1004,3 +1004,67 @@ def test_slam_process_endpoint_runs_when_provider_is_slam() -> None:
         os.environ.pop("CAPTURE_PROCESSOR", None)
 
 
+def test_slam_extracts_frames_from_video() -> None:
+    reset_demo_store()
+
+    from app.capture_processing import CaptureProcessor
+    from PIL import Image, ImageDraw
+    import tempfile
+    from pathlib import Path
+
+    cv2 = __import__("pytest").importorskip("cv2")
+
+    video_path = Path(tempfile.mktemp(suffix=".mp4"))
+    try:
+        writer = cv2.VideoWriter(str(video_path), cv2.VideoWriter_fourcc(*"mp4v"), 10, (320, 180))
+        assert writer.isOpened()
+        for index in range(30):
+            import numpy as np
+            frame = np.full((180, 320, 3), 30, dtype=np.uint8)
+            cv2.rectangle(frame, (index * 8, 40), (index * 8 + 20, 60), (200, 160, 40), -1)
+            writer.write(frame)
+        writer.release()
+
+        result = CaptureProcessor().extract_frames_from_video(video_path, target_frames=8)
+        assert result["source"] == "slam"
+        assert result["available"] is True
+        assert result["sampled"] > 0
+        assert len(result["frames"]) == result["sampled"]
+        assert result["total_video_frames"] == 30
+    finally:
+        video_path.unlink(missing_ok=True)
+
+
+def test_slam_pipeline_accepts_video_path() -> None:
+    reset_demo_store()
+
+    from app.capture_processing import CaptureProcessor
+
+    cv2 = __import__("pytest").importorskip("cv2")
+    import numpy as np
+    import tempfile
+    from pathlib import Path
+
+    video_path = Path(tempfile.mktemp(suffix=".mp4"))
+    try:
+        writer = cv2.VideoWriter(str(video_path), cv2.VideoWriter_fourcc(*"mp4v"), 10, (320, 180))
+        assert writer.isOpened()
+        for index in range(25):
+            frame = np.full((180, 320, 3), 25, dtype=np.uint8)
+            for offset in range(0, 320, 32):
+                cv2.circle(frame, (offset, 60 + (index % 3) * 20), 5, (220, 180, 50), -1)
+            writer.write(frame)
+        writer.release()
+
+        result = CaptureProcessor().run_slam_pipeline(video_path=video_path)
+        assert result["source"] == "slam"
+        if result["available"]:
+            assert result["pose_count"] >= 1
+    finally:
+        video_path.unlink(missing_ok=True)
+        frames_dir = video_path.parent / "slam_frames"
+        if frames_dir.exists():
+            import shutil
+            shutil.rmtree(frames_dir, ignore_errors=True)
+
+

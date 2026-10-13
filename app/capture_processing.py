@@ -525,8 +525,88 @@ class CaptureProcessor:
             "message": f"Pose graph optimized with {corrections} loop closure correction(s).",
         }
 
-    def run_slam_pipeline(self, frame_paths: list[str | Path]) -> dict[str, Any]:
-        """Full SLAM: visual odometry, trajectory chaining, loop closure, pose-graph optimization."""
+    def extract_frames_from_video(self, video_path: str | Path, target_frames: int = 24) -> dict[str, Any]:
+        """Extract evenly sampled frames from an .insv/.mp4 video for SLAM processing."""
+        try:
+            import cv2
+        except ImportError:
+            return {
+                "source": "slam",
+                "available": False,
+                "frames": [],
+                "message": "OpenCV is not installed. Add 'opencv-python' to enable video frame extraction.",
+            }
+
+        file_path = Path(video_path)
+        if not file_path.exists():
+            return {
+                "source": "slam",
+                "available": True,
+                "frames": [],
+                "message": f"Video file does not exist: {file_path.name}.",
+            }
+
+        capture = cv2.VideoCapture(str(file_path))
+        if not capture.isOpened():
+            return {
+                "source": "slam",
+                "available": True,
+                "frames": [],
+                "message": f"Could not open video file: {file_path.name}.",
+            }
+
+        total = int(capture.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+        step = max(1, total // target_frames) if total > 0 else 1
+        frames: list[str] = []
+        temp_dir = Path(file_path).parent / "slam_frames"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+
+        index = 0
+        written = 0
+        while True:
+            ok, frame = capture.read()
+            if not ok:
+                break
+            if index % step == 0 and written < target_frames:
+                frame_path = temp_dir / f"frame_{written:04d}.jpg"
+                cv2.imwrite(str(frame_path), frame)
+                frames.append(str(frame_path))
+                written += 1
+            index += 1
+        capture.release()
+
+        return {
+            "source": "slam",
+            "available": True,
+            "frames": frames,
+            "total_video_frames": total,
+            "sampled": len(frames),
+            "message": f"Sampled {len(frames)} frames from {file_path.name} ({total} total).",
+        }
+
+    def run_slam_pipeline(self, frame_paths: list[str | Path] | None = None, video_path: str | Path | None = None) -> dict[str, Any]:
+        """Full SLAM: frame extraction (if video), visual odometry, trajectory chaining, loop closure, pose-graph optimization."""
+        if video_path is not None:
+            extraction = self.extract_frames_from_video(video_path)
+            if not extraction.get("frames"):
+                return {
+                    "source": "slam",
+                    "available": extraction.get("available", False),
+                    "poses": [],
+                    "loop_closures": [],
+                    "message": extraction.get("message", "Frame extraction failed."),
+                }
+            frame_paths = extraction["frames"]
+
+        if not frame_paths:
+            return {
+                "source": "slam",
+                "available": False,
+                "poses": [],
+                "loop_closures": [],
+                "message": "No frames or video supplied for SLAM processing.",
+            }
+
         trajectory = self.estimate_trajectory(frame_paths)
         if not trajectory.get("available"):
             return {
