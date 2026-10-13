@@ -902,3 +902,105 @@ def test_visual_odometry_estimates_motion_between_frames() -> None:
             frame.unlink(missing_ok=True)
 
 
+def _make_synthetic_slam_frames(count: int = 6) -> list:
+    from PIL import Image, ImageDraw
+    import tempfile
+    from pathlib import Path
+
+    frames: list[Path] = []
+    for index in range(count):
+        img = Image.new("RGB", (640, 360), (25, 28, 32))
+        draw = ImageDraw.Draw(img)
+        offset = index * 12
+        for x in range(0, 640, 40):
+            for y in range(0, 360, 40):
+                draw.rectangle([x + offset, y, x + offset + 10, y + 10], fill=(235, 200, 60))
+                draw.ellipse([x - offset // 2 + 5, y + 14, x - offset // 2 + 13, y + 22], fill=(60, 120, 220))
+        tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
+        tmp.close()
+        img.save(tmp.name, format="JPEG", quality=90)
+        frames.append(Path(tmp.name))
+    return frames
+
+
+def test_slam_pipeline_chains_trajectory_from_frames() -> None:
+    reset_demo_store()
+
+    from app.capture_processing import CaptureProcessor
+
+    frames = _make_synthetic_slam_frames(6)
+    try:
+        result = CaptureProcessor().run_slam_pipeline(frames)
+        assert result["source"] == "slam"
+        if result["available"]:
+            assert result["pose_count"] >= 2
+            assert len(result["poses"]) == result["pose_count"]
+            assert "x" in result["poses"][0] and "y" in result["poses"][0]
+            assert result["poses"][0]["x"] == 0.0
+        else:
+            assert "OpenCV" in result["message"]
+    finally:
+        for frame in frames:
+            frame.unlink(missing_ok=True)
+
+
+def test_slam_loop_closure_runs_on_frame_set() -> None:
+    reset_demo_store()
+
+    from app.capture_processing import CaptureProcessor
+
+    frames = _make_synthetic_slam_frames(11)
+    try:
+        result = CaptureProcessor().detect_loop_closures(frames)
+        assert result["source"] == "slam"
+        assert "loop_closures" in result
+        if result["available"]:
+            for closure in result["loop_closures"]:
+                assert closure["frame_b"] - closure["frame_a"] >= 8
+                assert closure["matches"] >= 40
+    finally:
+        for frame in frames:
+            frame.unlink(missing_ok=True)
+
+
+def test_slam_optimizes_pose_graph_with_loop_closure() -> None:
+    reset_demo_store()
+
+    from app.capture_processing import CaptureProcessor
+
+    trajectory = {
+        "poses": [
+            {"frame": 0, "x": 0.0, "y": 0.0, "heading": 0.0, "confidence": 1.0},
+            {"frame": 1, "x": 10.0, "y": 0.0, "heading": 90.0, "confidence": 0.8},
+            {"frame": 2, "x": 20.0, "y": 0.0, "heading": 90.0, "confidence": 0.8},
+            {"frame": 10, "x": 5.0, "y": 2.0, "heading": 180.0, "confidence": 0.8},
+        ]
+    }
+    closures = {"loop_closures": [{"frame_a": 0, "frame_b": 10, "matches": 60, "strength": 0.8}]}
+
+    result = CaptureProcessor().optimize_pose_graph(trajectory, closures)
+    assert result["optimized"] is True
+    assert result["corrections_applied"] == 1
+    final_pose = result["poses"][-1]
+    assert abs(final_pose["x"]) < 5.0
+
+
+def test_slam_process_endpoint_runs_when_provider_is_slam() -> None:
+    reset_demo_store()
+
+    import os
+    os.environ["CAPTURE_PROCESSOR"] = "slam"
+    try:
+        from app.capture_processing import CaptureProcessor
+        processor = CaptureProcessor()
+        status = processor.status()
+        assert status.processor == "slam"
+        assert status.status == "ready"
+        assert "loop_closure" in status.capabilities
+
+        result = processor.process({"source": "slam", "frames": []})
+        assert result["processor"] == "slam"
+    finally:
+        os.environ.pop("CAPTURE_PROCESSOR", None)
+
+

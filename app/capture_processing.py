@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import math
 import os
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
@@ -391,6 +392,173 @@ class CaptureProcessor:
             "message": f"Visual odometry prototype estimated motion across {len(paths)} frames.",
         }
 
+    def estimate_trajectory(self, frame_paths: list[str | Path]) -> dict[str, Any]:
+        """Chain visual odometry segments into a 2D trajectory pose graph."""
+        motion = self.estimate_visual_motion(frame_paths)
+        if not motion.get("available") or not motion.get("segments"):
+            return {
+                "source": "slam",
+                "available": motion.get("available", False),
+                "poses": [],
+                "message": motion.get("message", "No motion segments available."),
+            }
+
+        poses: list[dict[str, Any]] = [{"frame": 0, "x": 0.0, "y": 0.0, "heading": 0.0, "confidence": 1.0}]
+        x, y, heading = 0.0, 0.0, 0.0
+        for segment in motion["segments"]:
+            dx = segment["dx_px"]
+            dy = segment["dy_px"]
+            shift = (dx * dx + dy * dy) ** 0.5
+            if shift > 0.5:
+                heading = (heading + math.degrees(math.atan2(dy, dx)) * 0.15) % 360
+            radians = math.radians(heading)
+            x += dx * math.cos(radians) - dy * math.sin(radians)
+            y += dx * math.sin(radians) + dy * math.cos(radians)
+            poses.append({
+                "frame": segment["segment"] + 1,
+                "x": round(x, 3),
+                "y": round(y, 3),
+                "heading": round(heading, 2),
+                "confidence": segment["confidence"],
+            })
+
+        return {
+            "source": "slam",
+            "available": True,
+            "poses": poses,
+            "message": f"Trajectory chained across {len(poses)} poses.",
+        }
+
+    def detect_loop_closures(self, frame_paths: list[str | Path], min_separation: int = 8) -> dict[str, Any]:
+        """Detect revisited places by matching keyframes with SIFT descriptors."""
+        try:
+            import cv2
+        except ImportError:
+            return {
+                "source": "slam",
+                "available": False,
+                "loop_closures": [],
+                "message": "OpenCV is not installed. Add 'opencv-python' to enable loop closure.",
+            }
+
+        paths = [Path(p) for p in frame_paths]
+        if len(paths) < min_separation + 2:
+            return {
+                "source": "slam",
+                "available": True,
+                "loop_closures": [],
+                "message": "Not enough frames to detect loop closures.",
+            }
+
+        sift = cv2.SIFT_create()
+        matcher = cv2.BFMatcher(cv2.NORM_L2, crossCheck=False)
+        descriptors_by_frame: dict[int, Any] = {}
+        for index, path in enumerate(paths):
+            if not path.exists():
+                continue
+            image = cv2.imread(str(path))
+            if image is None:
+                continue
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            _, descriptors = sift.detectAndCompute(gray, None)
+            if descriptors is not None and len(descriptors) > 0:
+                descriptors_by_frame[index] = descriptors
+
+        loop_closures: list[dict[str, Any]] = []
+        frame_indices = sorted(descriptors_by_frame.keys())
+        for i, frame_a in enumerate(frame_indices):
+            for frame_b in frame_indices[i + 1:]:
+                if frame_b - frame_a < min_separation:
+                    continue
+                matches = matcher.knnMatch(descriptors_by_frame[frame_a], descriptors_by_frame[frame_b], k=2)
+                good = [m for m, n in matches if m.distance < 0.65 * n.distance]
+                if len(good) >= 40:
+                    loop_closures.append({
+                        "frame_a": frame_a,
+                        "frame_b": frame_b,
+                        "matches": len(good),
+                        "strength": round(min(1.0, len(good) / 120.0), 3),
+                    })
+
+        return {
+            "source": "slam",
+            "available": True,
+            "loop_closures": loop_closures,
+            "message": f"Detected {len(loop_closures)} loop closure candidate(s).",
+        }
+
+    def optimize_pose_graph(self, trajectory: dict[str, Any], loop_closures: dict[str, Any]) -> dict[str, Any]:
+        """Distribute accumulated drift across poses when a loop closure anchors two frames."""
+        poses = trajectory.get("poses", [])
+        closures = loop_closures.get("loop_closures", [])
+        if not poses or not closures:
+            return {
+                "source": "slam",
+                "optimized": False,
+                "poses": poses,
+                "message": "No loop closures available; trajectory returned as-is.",
+            }
+
+        optimized_poses = [dict(p) for p in poses]
+        pose_by_frame = {p["frame"]: i for i, p in enumerate(optimized_poses)}
+        corrections = 0
+        for closure in closures:
+            i = pose_by_frame.get(closure["frame_a"])
+            j = pose_by_frame.get(closure["frame_b"])
+            if i is None or j is None or j <= i:
+                continue
+            anchor = optimized_poses[i]
+            drift_x = optimized_poses[j]["x"] - anchor["x"]
+            drift_y = optimized_poses[j]["y"] - anchor["y"]
+            span = j - i
+            for k in range(i + 1, j + 1):
+                t = (k - i) / span
+                optimized_poses[k]["x"] = round(optimized_poses[k]["x"] - drift_x * t * closure["strength"], 3)
+                optimized_poses[k]["y"] = round(optimized_poses[k]["y"] - drift_y * t * closure["strength"], 3)
+            corrections += 1
+
+        return {
+            "source": "slam",
+            "optimized": corrections > 0,
+            "poses": optimized_poses,
+            "corrections_applied": corrections,
+            "message": f"Pose graph optimized with {corrections} loop closure correction(s).",
+        }
+
+    def run_slam_pipeline(self, frame_paths: list[str | Path]) -> dict[str, Any]:
+        """Full SLAM: visual odometry, trajectory chaining, loop closure, pose-graph optimization."""
+        trajectory = self.estimate_trajectory(frame_paths)
+        if not trajectory.get("available"):
+            return {
+                "source": "slam",
+                "available": False,
+                "poses": [],
+                "loop_closures": [],
+                "message": trajectory.get("message", "SLAM pipeline could not start."),
+            }
+
+        loops = self.detect_loop_closures(frame_paths)
+        optimized = self.optimize_pose_graph(trajectory, loops)
+        poses = optimized.get("poses", trajectory.get("poses", []))
+        confidence = 0.0
+        if poses:
+            confidence = round(sum(p.get("confidence", 0.0) for p in poses) / len(poses), 3)
+
+        return {
+            "source": "slam",
+            "available": True,
+            "poses": poses,
+            "loop_closures": loops.get("loop_closures", []),
+            "optimized": optimized.get("optimized", False),
+            "pose_count": len(poses),
+            "confidence": confidence,
+            "message": (
+                f"SLAM pipeline completed: {len(poses)} poses, "
+                f"{len(loops.get('loop_closures', []))} loop closure(s), "
+                f"optimization {'applied' if optimized.get('optimized') else 'not needed'}."
+            ),
+        }
+
     def calibrate_to_floor_plan(self, waypoint_result: dict[str, Any]) -> dict[str, Any]:
         """Calibrate normalized waypoints to floor-plan position and calculate alignment confidence."""
         waypoints = waypoint_result.get("waypoints", [])
@@ -478,7 +646,14 @@ class CaptureProcessor:
                 capabilities=("telemetry_ingest", "trajectory_estimation", "floor_plan_alignment"),
                 message="The native Insta360 X6 .insp/.insv parser is active and can normalize captured route telemetry.",
             )
-        if self.provider in {"slam", "vio"}:
+        if self.provider == "slam":
+            return CaptureProcessingStatus(
+                processor="slam",
+                status="ready",
+                capabilities=("telemetry_ingest", "trajectory_estimation", "floor_plan_alignment", "loop_closure", "pose_graph_optimization"),
+                message="SLAM pipeline is active: visual odometry, trajectory chaining, loop closure, and pose-graph optimization.",
+            )
+        if self.provider == "vio":
             return CaptureProcessingStatus(
                 processor=self.provider,
                 status="not_configured",
@@ -517,7 +692,10 @@ class CaptureProcessor:
                     }
                 else:
                     parsed = self.parse_insp_payload(None)
-            elif source in {"slam", "vio"}:
+            elif source == "slam":
+                frames = telemetry.get("frames") or telemetry.get("frame_paths") or []
+                parsed = self.run_slam_pipeline(frames) if frames else {"source": "slam", "poses": [], "confidence": 0.0, "message": "No frames supplied for SLAM processing."}
+            elif source == "vio":
                 parsed = {"source": source, "route": [], "motion": {}, "confidence": 0.0, "message": "Reserved worker is not configured yet."}
 
         result = {
