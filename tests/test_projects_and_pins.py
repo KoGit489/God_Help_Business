@@ -902,3 +902,78 @@ def test_visual_odometry_estimates_motion_between_frames() -> None:
             frame.unlink(missing_ok=True)
 
 
+def test_spaces_storage_uploads_photo_and_floor_plan(monkeypatch) -> None:
+    from io import BytesIO
+    from types import SimpleNamespace
+    from importlib import import_module
+    main_module = import_module("app.main")
+
+    class FakeS3:
+        def __init__(self):
+            self.uploads = {}
+
+        def upload_fileobj(self, file_obj, bucket, key, ExtraArgs=None):
+            self.uploads[key] = {"body": file_obj.read(), "bucket": bucket, "args": ExtraArgs or {}}
+
+    fake_s3 = FakeS3()
+    monkeypatch.setattr(main_module, "STORAGE_BACKEND", "s3")
+    monkeypatch.setenv("S3_BUCKET", "test-space")
+    monkeypatch.setattr(main_module, "_s3_client", lambda: fake_s3)
+
+    photo = SimpleNamespace(filename="site.jpg", content_type="image/jpeg", file=BytesIO(b"photo-bytes"))
+    photo_key = main_module._store_photo("project-1", "pin-1", photo)
+    assert photo_key == "uploads/project-1/pin-1/site.jpg"
+    assert fake_s3.uploads[photo_key]["body"] == b"photo-bytes"
+    assert fake_s3.uploads[photo_key]["args"]["ContentType"] == "image/jpeg"
+
+    plan = SimpleNamespace(filename="plan.png", content_type="image/png", file=BytesIO(b"plan-bytes"))
+    plan_key = main_module._store_floor_plan("project-1", plan)
+    assert plan_key == "floorplans/project-1/plan.png"
+    assert fake_s3.uploads[plan_key]["body"] == b"plan-bytes"
+
+
+def test_spaces_media_route_redirects_to_short_lived_signed_url(monkeypatch) -> None:
+    from importlib import import_module
+    main_module = import_module("app.main")
+
+    class FakeS3:
+        def generate_presigned_url(self, operation, Params, ExpiresIn):
+            assert operation == "get_object"
+            assert Params == {"Bucket": "test-space", "Key": "previews/project-1/pin-1/preview.jpg"}
+            assert ExpiresIn == 900
+            return "https://test-space.example/signed-preview"
+
+    monkeypatch.setattr(main_module, "STORAGE_BACKEND", "s3")
+    monkeypatch.setenv("S3_BUCKET", "test-space")
+    monkeypatch.setattr(main_module, "_s3_client", lambda: FakeS3())
+
+    response = client.get(
+        "/media/previews/project-1/pin-1/preview.jpg",
+        follow_redirects=False,
+    )
+    assert response.status_code == 307
+    assert response.headers["location"] == "https://test-space.example/signed-preview"
+
+
+def test_spaces_media_is_temporarily_downloaded_for_processing(monkeypatch) -> None:
+    from importlib import import_module
+
+    main_module = import_module("app.main")
+
+    class FakeS3:
+        def download_file(self, bucket, key, filename):
+            from pathlib import Path
+            Path(filename).write_bytes(b"temporary-native-content")
+
+    monkeypatch.setattr(main_module, "STORAGE_BACKEND", "s3")
+    monkeypatch.setenv("S3_BUCKET", "test-space")
+    monkeypatch.setattr(main_module, "_s3_client", lambda: FakeS3())
+
+    with main_module._materialized_media_path("uploads/p1/p2/native/capture.insv") as path:
+        assert path.exists()
+        assert path.read_bytes() == b"temporary-native-content"
+        temporary_path = path
+
+    assert not temporary_path.exists()
+
+

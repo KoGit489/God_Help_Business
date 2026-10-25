@@ -6,10 +6,11 @@ COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
+COPY frontend ./frontend
 
 ENV APP_PERSISTENCE=database
-ENV STORAGE_BACKEND=local
-ENV UPLOAD_DIR=/var/app/uploads
+ENV STORAGE_BACKEND=s3
+ENV UPLOAD_DIR=/tmp/god-help-uploads
 
 EXPOSE 8000
 

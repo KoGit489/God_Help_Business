@@ -4,6 +4,7 @@ import logging
 import json
 import os
 import shutil
+import tempfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -13,7 +14,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import create_engine, select
@@ -308,25 +309,58 @@ def _create_share_url(token: str) -> str:
     return f"{base}/share/{token}"
 
 
+def _s3_client():
+    try:
+        import boto3
+    except ImportError as exc:
+        raise HTTPException(status_code=500, detail="boto3 is required for S3 storage backend") from exc
+
+    bucket = os.getenv("S3_BUCKET")
+    region = os.getenv("S3_REGION")
+    endpoint_url = os.getenv("S3_ENDPOINT_URL")
+    if not bucket or not region or not endpoint_url:
+        raise HTTPException(status_code=500, detail="S3_BUCKET, S3_REGION, and S3_ENDPOINT_URL are required for S3 storage")
+    if not os.getenv("AWS_ACCESS_KEY_ID") or not os.getenv("AWS_SECRET_ACCESS_KEY"):
+        raise HTTPException(status_code=500, detail="Spaces access key credentials are not configured")
+    return boto3.client("s3", region_name=region, endpoint_url=endpoint_url)
+
+
+def _upload_s3_fileobj(file_obj, key: str, content_type: str | None = None) -> None:
+    extra_args = {"ContentType": content_type} if content_type else None
+    file_obj.seek(0)
+    _s3_client().upload_fileobj(file_obj, os.environ["S3_BUCKET"], key, ExtraArgs=extra_args or {})
+
+
+def _materialized_media_path(media_key: str):
+    """Yield a local file path for media processing, downloading from Spaces if needed."""
+    from contextlib import contextmanager
+
+    @contextmanager
+    def materialize():
+        if STORAGE_BACKEND != "s3":
+            local_path = UPLOAD_DIR / media_key.removeprefix("uploads/")
+            yield local_path
+            return
+
+        suffix = Path(media_key).suffix or ".bin"
+        handle = tempfile.NamedTemporaryFile(prefix="god-help-", suffix=suffix, delete=False)
+        temp_path = Path(handle.name)
+        handle.close()
+        try:
+            _s3_client().download_file(os.environ["S3_BUCKET"], media_key, str(temp_path))
+            yield temp_path
+        finally:
+            temp_path.unlink(missing_ok=True)
+
+    return materialize()
+
+
 def _store_photo(project_id: str, pin_id: str, upload: UploadFile) -> str:
     filename = Path(upload.filename or "upload.bin").name
     photo_key = f"uploads/{project_id}/{pin_id}/{filename}"
 
     if STORAGE_BACKEND == "s3":
-        try:
-            import boto3
-        except ImportError as exc:
-            raise HTTPException(status_code=500, detail="boto3 is required for S3 storage backend") from exc
-
-        bucket = os.getenv("S3_BUCKET")
-        region = os.getenv("S3_REGION")
-        endpoint_url = os.getenv("S3_ENDPOINT_URL")
-        if not bucket:
-            raise HTTPException(status_code=500, detail="S3_BUCKET is required for S3 storage backend")
-
-        s3_client = boto3.client("s3", region_name=region, endpoint_url=endpoint_url)
-        upload.file.seek(0)
-        s3_client.upload_fileobj(upload.file, bucket, photo_key)
+        _upload_s3_fileobj(upload.file, photo_key, upload.content_type)
         return photo_key
 
     destination = UPLOAD_DIR / project_id / pin_id
@@ -344,20 +378,7 @@ def _store_native_file(project_id: str, pin_id: str, upload: UploadFile) -> str:
     native_key = f"uploads/{project_id}/{pin_id}/native/{filename}"
 
     if STORAGE_BACKEND == "s3":
-        try:
-            import boto3
-        except ImportError as exc:
-            raise HTTPException(status_code=500, detail="boto3 is required for S3 storage backend") from exc
-
-        bucket = os.getenv("S3_BUCKET")
-        region = os.getenv("S3_REGION")
-        endpoint_url = os.getenv("S3_ENDPOINT_URL")
-        if not bucket:
-            raise HTTPException(status_code=500, detail="S3_BUCKET is required for S3 storage backend")
-
-        s3_client = boto3.client("s3", region_name=region, endpoint_url=endpoint_url)
-        upload.file.seek(0)
-        s3_client.upload_fileobj(upload.file, bucket, native_key)
+        _upload_s3_fileobj(upload.file, native_key, upload.content_type)
         return native_key
 
     destination = UPLOAD_DIR / project_id / pin_id / "native"
@@ -373,41 +394,40 @@ def _store_native_file(project_id: str, pin_id: str, upload: UploadFile) -> str:
 def _store_floor_plan(project_id: str, upload: UploadFile) -> str:
     filename = Path(upload.filename or "floor-plan.bin").name
     destination = UPLOAD_DIR / "floorplans" / project_id
-    destination.mkdir(parents=True, exist_ok=True)
-    output_file = destination / filename
     upload.file.seek(0)
-    with output_file.open("wb") as handle:
-        shutil.copyfileobj(upload.file, handle)
+    file_data = upload.file.read()
+    content_type = upload.content_type or "application/octet-stream"
     if filename.lower().endswith(".pdf"):
         try:
             import pymupdf
-            doc = pymupdf.open(str(output_file))
+            doc = pymupdf.open(stream=file_data, filetype="pdf")
             page = doc.load_page(0)
             pixmap = page.get_pixmap(dpi=150)
             png_name = f"{Path(filename).stem}.png"
-            pixmap.save(str(destination / png_name))
+            file_data = pixmap.tobytes("png")
+            filename = png_name
+            content_type = "image/png"
             doc.close()
-            return f"floorplans/{project_id}/{png_name}"
         except Exception as exc:
             logger.warning("PDF rasterization failed, keeping original: %s", exc)
-    return f"floorplans/{project_id}/{filename}"
+
+    floor_plan_key = f"floorplans/{project_id}/{filename}"
+    if STORAGE_BACKEND == "s3":
+        from io import BytesIO
+        _upload_s3_fileobj(BytesIO(file_data), floor_plan_key, content_type)
+        return floor_plan_key
+
+    destination.mkdir(parents=True, exist_ok=True)
+    (destination / filename).write_bytes(file_data)
+    return floor_plan_key
 
 
 def _store_preview(project_id: str, pin_id: str, preview_data: bytes) -> str:
     """Store a generated preview image for a pin."""
     preview_key = f"previews/{project_id}/{pin_id}/preview.jpg"
     if STORAGE_BACKEND == "s3":
-        try:
-            import boto3
-        except ImportError as exc:
-            raise HTTPException(status_code=500, detail="boto3 is required for S3 storage backend") from exc
-
-        bucket = os.getenv("S3_BUCKET")
-        if not bucket:
-            raise HTTPException(status_code=500, detail="S3_BUCKET is required for S3 storage backend")
-
-        s3_client = boto3.client("s3", region_name=os.getenv("S3_REGION"), endpoint_url=os.getenv("S3_ENDPOINT_URL"))
-        s3_client.put_object(Bucket=bucket, Key=preview_key, Body=preview_data, ContentType="image/jpeg")
+        from io import BytesIO
+        _upload_s3_fileobj(BytesIO(preview_data), preview_key, "image/jpeg")
         return preview_key
 
     destination = UPLOAD_DIR / "previews" / project_id / pin_id
@@ -1292,13 +1312,14 @@ def process_pin_capture(project_id: str, pin_id: str, request: Request) -> dict[
                     pin.calibration_json = json.dumps(calibration_result)
             
             if pin.native_file_key and not pin.preview_key:
-                native_key_relative = pin.native_file_key.removeprefix("uploads/")
-                native_file_path = UPLOAD_DIR / native_key_relative
-                if native_file_path.exists():
-                    preview_result = capture_processor.extract_insp_preview(native_file_path)
-                    if preview_result.get("preview_available") and preview_result.get("preview_data"):
-                        preview_key = _store_preview(project_id, pin_id, preview_result["preview_data"])
-                        pin.preview_key = preview_key
+                try:
+                    with _materialized_media_path(pin.native_file_key) as native_file_path:
+                        if native_file_path.exists():
+                            preview_result = capture_processor.extract_insp_preview(native_file_path)
+                            if preview_result.get("preview_available") and preview_result.get("preview_data"):
+                                pin.preview_key = _store_preview(project_id, pin_id, preview_result["preview_data"])
+                except Exception:
+                    logger.exception("Could not process native media for pin %s", pin_id)
             
             db.commit()
             return result
@@ -1322,13 +1343,14 @@ def process_pin_capture(project_id: str, pin_id: str, request: Request) -> dict[
             pin["alignment_confidence"] = calibration_result.get("alignment_confidence", 0.0)
     
     if pin.get("native_file_key") and not pin.get("preview_key"):
-        native_key_relative = pin["native_file_key"].removeprefix("uploads/")
-        native_file_path = UPLOAD_DIR / native_key_relative
-        if native_file_path.exists():
-            preview_result = capture_processor.extract_insp_preview(native_file_path)
-            if preview_result.get("preview_available") and preview_result.get("preview_data"):
-                preview_key = _store_preview(project_id, pin_id, preview_result["preview_data"])
-                pin["preview_key"] = preview_key
+        try:
+            with _materialized_media_path(pin["native_file_key"]) as native_file_path:
+                if native_file_path.exists():
+                    preview_result = capture_processor.extract_insp_preview(native_file_path)
+                    if preview_result.get("preview_available") and preview_result.get("preview_data"):
+                        pin["preview_key"] = _store_preview(project_id, pin_id, preview_result["preview_data"])
+        except Exception:
+            logger.exception("Could not process native media for pin %s", pin_id)
     
     return result
 
@@ -1358,7 +1380,20 @@ def upload_floor_plan(project_id: str, request: Request, file: UploadFile = File
 
 
 @app.get("/media/{media_path:path}", tags=["media"])
-def serve_media(media_path: str) -> FileResponse:
+def serve_media(media_path: str):
+    if STORAGE_BACKEND == "s3":
+        client = _s3_client()
+        try:
+            url = client.generate_presigned_url(
+                "get_object",
+                Params={"Bucket": os.environ["S3_BUCKET"], "Key": media_path},
+                ExpiresIn=900,
+            )
+        except Exception as exc:
+            logger.exception("Could not create media URL")
+            raise HTTPException(status_code=404, detail="Media file not found") from exc
+        return RedirectResponse(url=url, status_code=307)
+
     relative_path = media_path.removeprefix("uploads/")
     requested_path = (UPLOAD_DIR / relative_path).resolve()
     upload_root = UPLOAD_DIR.resolve()
