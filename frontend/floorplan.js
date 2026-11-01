@@ -166,8 +166,8 @@ function renderCalibrationList() {
   });
 }
 
-function setCurrent(x, y, isStart = false) {
-  state.current = { x: Math.max(0, Math.min(1, x)), y: Math.max(0, Math.min(1, y)), saved: false };
+function setCurrent(x, y, isStart = false, saved = false) {
+  state.current = { x: Math.max(0, Math.min(1, x)), y: Math.max(0, Math.min(1, y)), saved };
   if (isStart) state.start = { ...state.current };
   byId('walk-step').disabled = false; byId('save-waypoint').disabled = false;
   renderWaypoints();
@@ -289,7 +289,9 @@ async function generateCapturePreview(pin, number) {
 }
 
 function openCapture(pin, number) {
-  const pins = viewerPins();
+  if (Number.isFinite(pin.position_x) && Number.isFinite(pin.position_y)) {
+    setCurrent(pin.position_x, pin.position_y, !state.start, true);
+  }
   const listIndex = state.project.pins.indexOf(pin);
   state.viewerIndex = listIndex;
   state.viewerPin = pin;
