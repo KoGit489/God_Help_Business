@@ -1311,6 +1311,10 @@ def process_pin_capture(project_id: str, pin_id: str, request: Request) -> dict[
                     pin.alignment_confidence = calibration_result.get("alignment_confidence", 0.0)
                     pin.calibration_json = json.dumps(calibration_result)
             
+            if not pin.native_file_key and pin.photo_key and Path(pin.photo_key).suffix.lower() in {".insp", ".insv"}:
+                pin.native_file_key = pin.photo_key
+                pin.photo_key = None
+
             if pin.native_file_key and not pin.preview_key:
                 try:
                     with _materialized_media_path(pin.native_file_key) as native_file_path:
@@ -1342,6 +1346,10 @@ def process_pin_capture(project_id: str, pin_id: str, request: Request) -> dict[
             pin["auto_position_y"] = calibration_result.get("auto_position_y")
             pin["alignment_confidence"] = calibration_result.get("alignment_confidence", 0.0)
     
+    if not pin.get("native_file_key") and pin.get("photo_key") and Path(pin["photo_key"]).suffix.lower() in {".insp", ".insv"}:
+        pin["native_file_key"] = pin["photo_key"]
+        pin["photo_key"] = None
+
     if pin.get("native_file_key") and not pin.get("preview_key"):
         try:
             with _materialized_media_path(pin["native_file_key"]) as native_file_path:

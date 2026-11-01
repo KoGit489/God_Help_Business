@@ -228,10 +228,18 @@ async function uploadPlan(file) {
 async function saveWaypoint() {
   if (!state.project || !state.current) { setStatus('Choose a project and click the plan first.'); return; }
   const x = state.current.x; const y = state.current.y;
-  setStatus('Saving waypoint...');
+  let photo = byId('photo-file').files[0] || null;
+  let native = byId('native-file').files[0] || null;
+  if (photo && /\.(insp|insv)$/i.test(photo.name)) {
+    if (native) { setStatus('Choose the .insp/.insv file only in the Original Insta360 X6 file field.'); return; }
+    native = photo;
+    photo = null;
+    setStatus('Recognized the .insp/.insv capture; saving it as the original file and generating its preview...');
+  } else {
+    setStatus('Saving waypoint...');
+  }
   try {
     const pin = await apiRequest(`/projects/${state.project.id}/pins`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ latitude: Number((5.55 + y * 0.02).toFixed(6)), longitude: Number((-0.25 + x * 0.02).toFixed(6)), heading: state.heading, position_x: x, position_y: y, captured_on: new Date().toISOString().slice(0, 10), media_type: 'insta360' }) });
-    const photo = byId('photo-file').files[0]; const native = byId('native-file').files[0];
     if (photo) { const form = new FormData(); form.append('file', photo); await apiRequest(`/projects/${state.project.id}/pins/${pin.id}/upload`, { method: 'POST', body: form }); }
     let previewUrl = null;
     if (native) {
@@ -250,6 +258,21 @@ async function saveWaypoint() {
 function mediaUrl(key) { return key ? `/media/${key}` : null; }
 function viewerPins() { return (state.project?.pins || []).filter((p) => p.position_x != null && p.position_y != null); }
 
+function isNativeCaptureKey(key) { return typeof key === 'string' && /\.(insp|insv)$/i.test(key.split('?')[0]); }
+
+async function generateCapturePreview(pin, number) {
+  const container = byId('panorama');
+  container.textContent = 'Generating a browser preview from the saved X6 file...';
+  try {
+    await apiRequest(`/projects/${state.project.id}/pins/${pin.id}/process`, { method: 'POST' });
+    const refreshed = await apiRequest(`/projects/${state.project.id}/pins/${pin.id}`);
+    Object.assign(pin, refreshed);
+    openCapture(pin, number);
+  } catch (error) {
+    container.textContent = `Preview generation failed: ${error.message}`;
+  }
+}
+
 function openCapture(pin, number) {
   const pins = viewerPins();
   const listIndex = state.project.pins.indexOf(pin);
@@ -258,7 +281,8 @@ function openCapture(pin, number) {
   trackNavHistory(pin);
   byId('viewer-title').textContent = `Capture #${number} · heading ${pin.heading || 0}°`;
   byId('viewer-modal').classList.add('open');
-  const imageUrl = mediaUrl(pin.photo_key || pin.thumbnail_key) || (pin.preview_url || null);
+  const previewKey = [pin.photo_key, pin.thumbnail_key].find((key) => key && !isNativeCaptureKey(key));
+  const imageUrl = mediaUrl(previewKey) || pin.preview_url || null;
   byId('plain-preview').style.display = 'none'; byId('panorama').style.display = 'block';
   if (state.viewer) { state.viewer.destroy(); state.viewer = null; }
   stopArrowLoop(); clearNavArrows();
@@ -266,7 +290,21 @@ function openCapture(pin, number) {
     state.viewer = pannellum.viewer('panorama', { type: 'equirectangular', panorama: imageUrl, autoLoad: true, yaw: pin.heading || 0, hotSpots: buildNavHotspots(pin) });
   }
   else if (imageUrl) { byId('panorama').style.display = 'none'; byId('plain-preview').src = imageUrl; byId('plain-preview').style.display = 'block'; updateNavArrows(pin); }
-  else { byId('panorama').innerHTML = '<div style="color:white;padding:4rem 1rem;text-align:center">No preview image yet. Upload a preview photo, or save the waypoint with its original .insp/.insv file and the app will generate one automatically.</div>'; }
+  else {
+    const rawCaptureKey = pin.native_file_key || [pin.photo_key, pin.thumbnail_key].find(isNativeCaptureKey);
+    const message = document.createElement('div');
+    message.style.cssText = 'color:white;padding:2rem 1rem;text-align:center';
+    message.textContent = rawCaptureKey
+      ? 'The original X6 file is saved, but it is not itself a browser preview.'
+      : 'No preview image is attached yet.';
+    byId('panorama').replaceChildren(message);
+    if (rawCaptureKey) {
+      const button = document.createElement('button');
+      button.type = 'button'; button.className = 'secondary'; button.textContent = 'Generate preview';
+      button.addEventListener('click', () => generateCapturePreview(pin, number));
+      byId('panorama').appendChild(button);
+    }
+  }
   updateNavButtons();
 }
 

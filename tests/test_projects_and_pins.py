@@ -977,3 +977,37 @@ def test_spaces_media_is_temporarily_downloaded_for_processing(monkeypatch) -> N
     assert not temporary_path.exists()
 
 
+def test_process_recovers_insp_misfiled_as_photo_and_creates_preview(monkeypatch, tmp_path) -> None:
+    from importlib import import_module
+
+    main_module = import_module("app.main")
+    monkeypatch.setattr(main_module, "PERSISTENCE_MODE", "memory")
+    monkeypatch.setattr(main_module, "STORAGE_BACKEND", "local")
+    monkeypatch.setattr(main_module, "UPLOAD_DIR", tmp_path)
+    monkeypatch.setattr(
+        main_module.capture_processor,
+        "extract_insp_preview",
+        lambda path: {"preview_available": True, "preview_data": b"preview", "preview_format": "jpeg"},
+    )
+    monkeypatch.setattr(main_module, "_store_preview", lambda project_id, pin_id, data: f"previews/{project_id}/{pin_id}/preview.jpg")
+    reset_demo_store()
+
+    project = client.post("/projects", json={"title": "Legacy Native Upload"}).json()
+    pin = client.post(
+        f"/projects/{project['id']}/pins",
+        json={"latitude": 0, "longitude": 0, "heading": 0, "position_x": 0.5, "position_y": 0.5, "captured_on": "2026-10-31", "media_type": "insta360"},
+    ).json()
+    photo_key = f"uploads/{project['id']}/{pin['id']}/capture.insp"
+    native_path = tmp_path / project["id"] / pin["id"] / "capture.insp"
+    native_path.parent.mkdir(parents=True, exist_ok=True)
+    native_path.write_bytes(b"not-an-image-preview")
+    main_module.pins_by_id[pin["id"]]["photo_key"] = photo_key
+
+    processed = client.post(f"/projects/{project['id']}/pins/{pin['id']}/process")
+    assert processed.status_code == 200
+    updated = client.get(f"/projects/{project['id']}/pins/{pin['id']}").json()
+    assert updated["photo_key"] is None
+    assert updated["native_file_key"] == photo_key
+    assert updated["preview_url"] == f"/media/previews/{project['id']}/{pin['id']}/preview.jpg"
+
+
