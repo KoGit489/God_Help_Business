@@ -305,6 +305,7 @@ function openCapture(pin, number) {
   stopArrowLoop(); clearNavArrows();
   if (imageUrl && window.pannellum && pin.media_type === 'insta360') {
     state.viewer = pannellum.viewer('panorama', { type: 'equirectangular', panorama: imageUrl, autoLoad: true, yaw: 0, hotSpots: buildNavHotspots(pin) });
+    updateNavArrows(pin);
   }
   else if (imageUrl) { byId('panorama').style.display = 'none'; byId('plain-preview').src = imageUrl; byId('plain-preview').style.display = 'block'; updateNavArrows(pin); }
   else {
@@ -324,6 +325,11 @@ function trackNavHistory(pin) {
   const h = state.navHistory;
   if (h.length >= 2 && h[h.length - 2] === pin.id) { h.pop(); return; }
   if (h[h.length - 1] !== pin.id) h.push(pin.id);
+}
+
+function navigateCapture(pin, back = false) {
+  if (back && state.navHistory.length < 2) state.navHistory.length = 0;
+  openCapture(pin, state.project.pins.indexOf(pin) + 1);
 }
 
 function clearNavArrows() { document.querySelectorAll('.nav-arrow').forEach((el) => el.remove()); }
@@ -352,7 +358,7 @@ function buildNavHotspots(pin) {
       cssClass: back ? 'nav-hotspot back' : 'nav-hotspot',
       createTooltipFunc: createFloorArrow,
       createTooltipArgs: back,
-      clickHandlerFunc: () => openCapture(target, state.project.pins.indexOf(target) + 1),
+      clickHandlerFunc: () => navigateCapture(target, back),
     };
   });
 }
@@ -381,16 +387,19 @@ function updateNavArrows(pin) {
   const viewYaw = currentViewYaw(pin);
   const halfFov = 90;
   navTargets(pin).forEach(({ pin: target, back }) => {
+    if (state.viewer && !back) return;
     const bearing = bearingBetween(pin, target);
     const rel = ((bearing - viewYaw) % 360 + 360) % 360;
     const signed = rel > 180 ? rel - 360 : rel;
-    if (Math.abs(signed) > halfFov) return;
+    if (!back && Math.abs(signed) > halfFov) return;
     const arrow = document.createElement('button');
     arrow.type = 'button'; arrow.className = `nav-arrow${back ? ' back' : ''}`; arrow.title = back ? 'Back to previous capture' : `Go to capture (heading ${Math.round(bearing)}°)`;
+    arrow.setAttribute('aria-label', arrow.title);
     arrow.innerHTML = '<span class="tip"></span>';
-    arrow.style.left = `${50 + (signed / halfFov) * 45}%`;
-    arrow.querySelector('.tip').style.transform = `rotate(${signed}deg)`;
-    arrow.addEventListener('click', (event) => { event.stopPropagation(); openCapture(target, state.project.pins.indexOf(target) + 1); });
+    arrow.style.left = back ? '50%' : `${50 + (signed / halfFov) * 45}%`;
+    if (back) arrow.style.top = '85%';
+    arrow.querySelector('.tip').style.transform = `rotate(${back ? 180 : signed}deg)`;
+    arrow.addEventListener('click', (event) => { event.stopPropagation(); navigateCapture(target, back); });
     container.appendChild(arrow);
   });
 }
@@ -437,7 +446,10 @@ async function loadProjects() {
 
 async function selectProject(projectId) {
   try {
-    state.project = await apiRequest(`/projects/${projectId}/review`); state.annotations = await apiRequest(`/projects/${projectId}/annotations`); state.start = null; state.current = null; state.calibrationPin = null; state.annotationMode = false; state.distance = 0; byId('route-distance').textContent = '0.0 ft';
+    state.project = await apiRequest(`/projects/${projectId}/review`); state.annotations = await apiRequest(`/projects/${projectId}/annotations`); state.plan = null; state.start = null; state.current = null; state.calibrationPin = null; state.annotationMode = false; state.distance = 0; byId('route-distance').textContent = '0.0 ft';
+    state.navHistory = []; state.editingPin = null;
+    byId('walk-step').disabled = true; byId('save-waypoint').disabled = true;
+    byId('edit-panel').style.display = 'none';
     const pinSelect = byId('annotation-pin'); pinSelect.innerHTML = '<option value="">General plan note</option>';
     state.project.pins.forEach((pin, index) => { const option = document.createElement('option'); option.value = pin.id; option.textContent = `Capture #${index + 1}`; pinSelect.appendChild(option); });
     renderPlan(); renderWaypoints(); setStatus(`${state.project.title} loaded. Upload a plan or choose a saved route.`);
