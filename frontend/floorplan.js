@@ -302,7 +302,7 @@ function openCapture(pin, number) {
   if (state.viewer) { state.viewer.destroy(); state.viewer = null; }
   stopArrowLoop(); clearNavArrows();
   if (imageUrl && window.pannellum && pin.media_type === 'insta360') {
-    state.viewer = pannellum.viewer('panorama', { type: 'equirectangular', panorama: imageUrl, autoLoad: true, yaw: pin.heading || 0, hotSpots: buildNavHotspots(pin) });
+    state.viewer = pannellum.viewer('panorama', { type: 'equirectangular', panorama: imageUrl, autoLoad: true, yaw: 0, hotSpots: buildNavHotspots(pin) });
   }
   else if (imageUrl) { byId('panorama').style.display = 'none'; byId('plain-preview').src = imageUrl; byId('plain-preview').style.display = 'block'; updateNavArrows(pin); }
   else {
@@ -342,7 +342,7 @@ function navTargets(pin) {
 function buildNavHotspots(pin) {
   return navTargets(pin).map(({ pin: target, back }) => {
     const bearing = bearingBetween(pin, target);
-    const yaw = ((bearing + 180) % 360 + 360) % 360 - 180;
+    const yaw = normalizeSignedAngle(bearing - (Number(pin.heading) || 0));
     return {
       yaw: yaw,
       pitch: -22,
@@ -366,6 +366,8 @@ function bearingBetween(fromPin, toPin) {
   return (Math.atan2(dx, -dy) * 180 / Math.PI + 360) % 360;
 }
 
+function normalizeSignedAngle(degrees) { return ((degrees + 180) % 360 + 360) % 360 - 180; }
+
 function currentViewYaw(pin) {
   if (state.viewer && typeof state.viewer.getYaw === 'function') return state.viewer.getYaw();
   return pin.heading || 0;
@@ -373,7 +375,7 @@ function currentViewYaw(pin) {
 
 function updateNavArrows(pin) {
   clearNavArrows();
-  const container = byId('panorama');
+  const container = byId('capture-media');
   const viewYaw = currentViewYaw(pin);
   const halfFov = 90;
   navTargets(pin).forEach(({ pin: target, back }) => {
