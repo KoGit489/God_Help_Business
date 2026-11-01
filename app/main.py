@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import create_engine, select
@@ -1396,17 +1396,30 @@ def upload_floor_plan(project_id: str, request: Request, file: UploadFile = File
 @app.get("/media/{media_path:path}", tags=["media"])
 def serve_media(media_path: str):
     if STORAGE_BACKEND == "s3":
-        client = _s3_client()
         try:
-            url = client.generate_presigned_url(
-                "get_object",
-                Params={"Bucket": os.environ["S3_BUCKET"], "Key": media_path},
-                ExpiresIn=900,
-            )
+            object_response = _s3_client().get_object(Bucket=os.environ["S3_BUCKET"], Key=media_path)
         except Exception as exc:
-            logger.exception("Could not create media URL")
+            logger.exception("Could not read Spaces media object %s", media_path)
             raise HTTPException(status_code=404, detail="Media file not found") from exc
-        return RedirectResponse(url=url, status_code=307)
+
+        body = object_response["Body"]
+
+        def stream_object():
+            try:
+                while chunk := body.read(64 * 1024):
+                    yield chunk
+            finally:
+                body.close()
+
+        headers = {"Cache-Control": "private, max-age=300"}
+        content_length = object_response.get("ContentLength")
+        if content_length is not None:
+            headers["Content-Length"] = str(content_length)
+        return StreamingResponse(
+            stream_object(),
+            media_type=object_response.get("ContentType", "application/octet-stream"),
+            headers=headers,
+        )
 
     relative_path = media_path.removeprefix("uploads/")
     requested_path = (UPLOAD_DIR / relative_path).resolve()

@@ -9,7 +9,7 @@ function buildApiBases() {
 }
 
 const apiBases = buildApiBases();
-const state = { project: null, plan: null, start: null, current: null, distance: 0, heading: 0, viewer: null, timer: null, calibrationPin: null, annotationMode: false, annotations: [], editingPin: null, viewerIndex: -1, navHistory: [], navRaf: null, viewerPin: null };
+const state = { project: null, plan: null, start: null, current: null, distance: 0, heading: 0, viewer: null, timer: null, calibrationPin: null, annotationMode: false, annotations: [], editingPin: null, viewerIndex: -1, navHistory: [], navRaf: null, viewerPin: null, previewGeneration: new Set() };
 const byId = (id) => document.getElementById(id);
 
 function setStatus(text) { byId('plan-status').textContent = text; }
@@ -261,8 +261,14 @@ function viewerPins() { return (state.project?.pins || []).filter((p) => p.posit
 function isNativeCaptureKey(key) { return typeof key === 'string' && /\.(insp|insv)$/i.test(key.split('?')[0]); }
 
 async function generateCapturePreview(pin, number) {
+  if (state.previewGeneration.has(pin.id)) return;
+  state.previewGeneration.add(pin.id);
   const container = byId('panorama');
-  container.textContent = 'Generating a browser preview from the saved X6 file...';
+  container.replaceChildren();
+  const progress = document.createElement('div');
+  progress.style.cssText = 'color:white;padding:2rem 1rem;text-align:center';
+  progress.textContent = 'Preparing the 360 preview from the saved X6 file...';
+  container.appendChild(progress);
   try {
     const processed = await apiRequest(`/projects/${state.project.id}/pins/${pin.id}/process`, { method: 'POST' });
     const refreshed = await apiRequest(`/projects/${state.project.id}/pins/${pin.id}`);
@@ -272,7 +278,13 @@ async function generateCapturePreview(pin, number) {
     Object.assign(pin, refreshed);
     openCapture(pin, number);
   } catch (error) {
-    container.textContent = `Preview generation failed: ${error.message}`;
+    container.replaceChildren();
+    const failure = document.createElement('div');
+    failure.style.cssText = 'color:white;padding:2rem 1rem;text-align:center';
+    failure.textContent = `Preview generation failed: ${error.message}`;
+    container.appendChild(failure);
+  } finally {
+    state.previewGeneration.delete(pin.id);
   }
 }
 
@@ -298,15 +310,10 @@ function openCapture(pin, number) {
     const message = document.createElement('div');
     message.style.cssText = 'color:white;padding:2rem 1rem;text-align:center';
     message.textContent = rawCaptureKey
-      ? 'The original X6 file is saved, but it is not itself a browser preview.'
+      ? 'Preparing a browser preview from the original X6 capture...'
       : 'No preview image is attached yet.';
     byId('panorama').replaceChildren(message);
-    if (rawCaptureKey) {
-      const button = document.createElement('button');
-      button.type = 'button'; button.className = 'preview-action'; button.textContent = 'Generate preview';
-      button.addEventListener('click', () => generateCapturePreview(pin, number));
-      byId('panorama').appendChild(button);
-    }
+    if (rawCaptureKey) generateCapturePreview(pin, number);
   }
   updateNavButtons();
 }

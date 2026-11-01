@@ -932,16 +932,16 @@ def test_spaces_storage_uploads_photo_and_floor_plan(monkeypatch) -> None:
     assert fake_s3.uploads[plan_key]["body"] == b"plan-bytes"
 
 
-def test_spaces_media_route_redirects_to_short_lived_signed_url(monkeypatch) -> None:
+def test_spaces_media_route_streams_private_object_through_app(monkeypatch) -> None:
+    from io import BytesIO
     from importlib import import_module
     main_module = import_module("app.main")
 
     class FakeS3:
-        def generate_presigned_url(self, operation, Params, ExpiresIn):
-            assert operation == "get_object"
-            assert Params == {"Bucket": "test-space", "Key": "previews/project-1/pin-1/preview.jpg"}
-            assert ExpiresIn == 900
-            return "https://test-space.example/signed-preview"
+        def get_object(self, Bucket, Key):
+            assert Bucket == "test-space"
+            assert Key == "previews/project-1/pin-1/preview.jpg"
+            return {"Body": BytesIO(b"private-preview-bytes"), "ContentType": "image/jpeg", "ContentLength": 21}
 
     monkeypatch.setattr(main_module, "STORAGE_BACKEND", "s3")
     monkeypatch.setenv("S3_BUCKET", "test-space")
@@ -949,10 +949,10 @@ def test_spaces_media_route_redirects_to_short_lived_signed_url(monkeypatch) -> 
 
     response = client.get(
         "/media/previews/project-1/pin-1/preview.jpg",
-        follow_redirects=False,
     )
-    assert response.status_code == 307
-    assert response.headers["location"] == "https://test-space.example/signed-preview"
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/jpeg"
+    assert response.content == b"private-preview-bytes"
 
 
 def test_spaces_media_is_temporarily_downloaded_for_processing(monkeypatch) -> None:
