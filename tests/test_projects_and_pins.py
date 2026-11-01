@@ -1011,3 +1011,23 @@ def test_process_recovers_insp_misfiled_as_photo_and_creates_preview(monkeypatch
     assert updated["preview_url"] == f"/media/previews/{project['id']}/{pin['id']}/preview.jpg"
 
 
+def test_preview_extractor_decodes_jpeg_encoded_insp_file() -> None:
+    from app.capture_processing import CaptureProcessor
+    from PIL import Image
+    import tempfile
+    from pathlib import Path
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".insp", delete=False)
+    tmp.close()
+    path = Path(tmp.name)
+    try:
+        Image.new("RGB", (320, 160), (80, 120, 160)).save(path, format="JPEG")
+        result = CaptureProcessor().extract_insp_preview(path)
+        assert result["preview_available"] is True
+        assert result["preview_width"] == 320
+        assert result["preview_height"] == 160
+        assert result["preview_data"].startswith(b"\xff\xd8")
+    finally:
+        path.unlink(missing_ok=True)
+
+

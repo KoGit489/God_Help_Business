@@ -1322,8 +1322,11 @@ def process_pin_capture(project_id: str, pin_id: str, request: Request) -> dict[
                             preview_result = capture_processor.extract_insp_preview(native_file_path)
                             if preview_result.get("preview_available") and preview_result.get("preview_data"):
                                 pin.preview_key = _store_preview(project_id, pin_id, preview_result["preview_data"])
+                            else:
+                                result["preview_error"] = preview_result.get("message", "No browser preview could be generated.")
                 except Exception:
                     logger.exception("Could not process native media for pin %s", pin_id)
+                    result["preview_error"] = "The original capture could not be read for preview generation. Check the app logs."
             
             db.commit()
             return result
@@ -1357,8 +1360,11 @@ def process_pin_capture(project_id: str, pin_id: str, request: Request) -> dict[
                     preview_result = capture_processor.extract_insp_preview(native_file_path)
                     if preview_result.get("preview_available") and preview_result.get("preview_data"):
                         pin["preview_key"] = _store_preview(project_id, pin_id, preview_result["preview_data"])
+                    else:
+                        result["preview_error"] = preview_result.get("message", "No browser preview could be generated.")
         except Exception:
             logger.exception("Could not process native media for pin %s", pin_id)
+            result["preview_error"] = "The original capture could not be read for preview generation. Check the app logs."
     
     return result
 

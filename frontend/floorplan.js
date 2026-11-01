@@ -264,8 +264,11 @@ async function generateCapturePreview(pin, number) {
   const container = byId('panorama');
   container.textContent = 'Generating a browser preview from the saved X6 file...';
   try {
-    await apiRequest(`/projects/${state.project.id}/pins/${pin.id}/process`, { method: 'POST' });
+    const processed = await apiRequest(`/projects/${state.project.id}/pins/${pin.id}/process`, { method: 'POST' });
     const refreshed = await apiRequest(`/projects/${state.project.id}/pins/${pin.id}`);
+    if (!refreshed.preview_url) {
+      throw new Error(processed.preview_error || 'No browser preview was produced. Export a JPG from the Insta360 app and replace the preview image.');
+    }
     Object.assign(pin, refreshed);
     openCapture(pin, number);
   } catch (error) {
@@ -300,7 +303,7 @@ function openCapture(pin, number) {
     byId('panorama').replaceChildren(message);
     if (rawCaptureKey) {
       const button = document.createElement('button');
-      button.type = 'button'; button.className = 'secondary'; button.textContent = 'Generate preview';
+      button.type = 'button'; button.className = 'preview-action'; button.textContent = 'Generate preview';
       button.addEventListener('click', () => generateCapturePreview(pin, number));
       byId('panorama').appendChild(button);
     }
