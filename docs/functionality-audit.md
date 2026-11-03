@@ -19,6 +19,9 @@ Production data and credentials were not accessed.
 - Prevent arrow presses from starting camera drags. Both arrows stay anchored
   to scene bearings, so an arrow behind the camera appears when looking back,
   not as an always-visible screen overlay.
+- Use capture one's heading as the shared panorama reference instead of
+  rotating image-relative arrows whenever the walking heading changes.
+  Preserve viewing direction across navigation and automatic preview loading.
 - Clear the previous drawing, route controls, editing selection, and navigation
   history when changing projects.
 - Refresh the real project after creating a share link, preserving completed
@@ -59,6 +62,13 @@ with the scene. Screenshots confirmed the shapes and absence of fixed triangles.
 These are local browser checks, not certification of every physical touch device
 or confirmation that the live Droplet has deployed this revision.
 
+A follow-up uses the reported capture coordinates and headings 0, 90, 90 with
+three commonly aligned panorama fixtures. Capture one's forward yaw remains 90;
+capture two uses forward yaw 90 and backward yaw -90. Real desktop clicks
+completed 2 -> 3 -> 2 -> 1, preserving view yaw 90 forward and -90 backward.
+The mobile viewport confirmed the same shared reference and visible white arrow
+when looking toward the previous location. Walking headings remained unchanged.
+
 Run the preserved-behavior gates from the repository root:
 
 ```powershell
@@ -88,3 +98,8 @@ git diff --check
   guard when a project is active; successful review/share workflows were tested.
 - Unusual concurrent actions and complete branch/error-path coverage remain
   unverified. No claim of 100% function coverage is made.
+- The shared panorama reference assumes exports aligned like capture one.
+  Independently rotated images need separate image calibration, which is not
+  inferred from walking headings. Changing/removing the first positioned
+  capture changes this default reference; durable project/image calibration
+  metadata is not implemented by this focused correction.

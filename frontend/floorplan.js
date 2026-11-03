@@ -260,7 +260,7 @@ function viewerPins() { return (state.project?.pins || []).filter((p) => p.posit
 
 function isNativeCaptureKey(key) { return typeof key === 'string' && /\.(insp|insv)$/i.test(key.split('?')[0]); }
 
-async function generateCapturePreview(pin, number) {
+async function generateCapturePreview(pin, number, initialYaw = null) {
   if (state.previewGeneration.has(pin.id)) return;
   state.previewGeneration.add(pin.id);
   const container = byId('panorama');
@@ -276,7 +276,7 @@ async function generateCapturePreview(pin, number) {
       throw new Error(processed.preview_error || 'No browser preview was produced. Export a JPG from the Insta360 app and replace the preview image.');
     }
     Object.assign(pin, refreshed);
-    openCapture(pin, number);
+    openCapture(pin, number, initialYaw);
   } catch (error) {
     container.replaceChildren();
     const failure = document.createElement('div');
@@ -288,7 +288,7 @@ async function generateCapturePreview(pin, number) {
   }
 }
 
-function openCapture(pin, number) {
+function openCapture(pin, number, initialYaw = null) {
   if (Number.isFinite(pin.position_x) && Number.isFinite(pin.position_y)) {
     setCurrent(pin.position_x, pin.position_y, !state.start, true);
   }
@@ -304,7 +304,8 @@ function openCapture(pin, number) {
   if (state.viewer) { state.viewer.destroy(); state.viewer = null; }
   stopArrowLoop(); clearNavArrows();
   if (imageUrl && window.pannellum && pin.media_type === 'insta360') {
-    state.viewer = pannellum.viewer('panorama', { type: 'equirectangular', panorama: imageUrl, autoLoad: true, yaw: 0, hotSpots: buildNavHotspots(pin) });
+    const yaw = initialYaw ?? normalizeSignedAngle((Number(pin.heading) || 0) - panoramaReferenceHeading());
+    state.viewer = pannellum.viewer('panorama', { type: 'equirectangular', panorama: imageUrl, autoLoad: true, yaw, hotSpots: buildNavHotspots(pin) });
   }
   else if (imageUrl) { byId('panorama').style.display = 'none'; byId('plain-preview').src = imageUrl; byId('plain-preview').style.display = 'block'; updateNavArrows(pin); }
   else {
@@ -315,7 +316,7 @@ function openCapture(pin, number) {
       ? 'Preparing a browser preview from the original X6 capture...'
       : 'No preview image is attached yet.';
     byId('panorama').replaceChildren(message);
-    if (rawCaptureKey) generateCapturePreview(pin, number);
+    if (rawCaptureKey) generateCapturePreview(pin, number, initialYaw);
   }
   updateNavButtons();
 }
@@ -328,7 +329,8 @@ function trackNavHistory(pin) {
 
 function navigateCapture(pin, back = false) {
   if (back && state.navHistory.length < 2) state.navHistory.length = 0;
-  openCapture(pin, state.project.pins.indexOf(pin) + 1);
+  const initialYaw = state.viewer ? state.viewer.getYaw() : null;
+  openCapture(pin, state.project.pins.indexOf(pin) + 1, initialYaw);
 }
 
 function clearNavArrows() { document.querySelectorAll('.nav-arrow').forEach((el) => el.remove()); }
@@ -344,10 +346,12 @@ function navTargets(pin) {
   return targets;
 }
 
+function panoramaReferenceHeading() { return Number(viewerPins()[0]?.heading) || 0; }
+
 function buildNavHotspots(pin) {
   return navTargets(pin).map(({ pin: target, back }) => {
     const bearing = bearingBetween(pin, target);
-    const yaw = normalizeSignedAngle(bearing - (Number(pin.heading) || 0));
+    const yaw = normalizeSignedAngle(bearing - panoramaReferenceHeading());
     return {
       yaw: yaw,
       pitch: -22,
@@ -427,7 +431,7 @@ function stepViewer(direction) {
   const nextIdx = idx + direction;
   if (idx < 0 || nextIdx < 0 || nextIdx >= pins.length) return;
   const target = pins[nextIdx];
-  openCapture(target, state.project.pins.indexOf(target) + 1);
+  navigateCapture(target, direction < 0);
 }
 
 function updateNavButtons() {

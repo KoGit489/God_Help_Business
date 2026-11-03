@@ -30,7 +30,7 @@ function loadFloorplan({ panorama = false } = {}) {
     return elements.get(id);
   }
   const panoramas = [];
-  const pannellum = { viewer: (id, config) => { panoramas.push(config); return { destroy() {}, getYaw: () => 0 }; } };
+  const pannellum = { viewer: (id, config) => { panoramas.push(config); return { destroy() {}, getYaw: () => config.yaw }; } };
   const context = vm.createContext({
     URLSearchParams,
     pannellum,
@@ -123,6 +123,28 @@ test('panorama floor hotspots retain heading-relative forward and back bearings'
   assert.equal(run('buildNavHotspots(state.project.pins[1])[1].yaw'), 0);
 });
 
+test('walking heading changes do not rotate panorama arrows away from capture one alignment', () => {
+  const { panoramas, run } = loadFloorplan({ panorama: true });
+  run("state.project = { pins: [{ id: 'one', position_x: 0.05753747768000021, position_y: 0.7572884547124815, heading: 0, photo_key: 'one.jpg', media_type: 'insta360' }, { id: 'two', position_x: 0.08757929725839059, position_y: 0.7572884547124815, heading: 90, photo_key: 'two.jpg', media_type: 'insta360' }, { id: 'three', position_x: 0.11757929725839059, position_y: 0.7572884547124815, heading: 90, photo_key: 'three.jpg', media_type: 'insta360' }] }; openCapture(state.project.pins[0], 1);");
+  assert.equal(panoramas[0].hotSpots[0].yaw, 90);
+  run('openCapture(state.project.pins[1], 2)');
+  assert.equal(panoramas[1].yaw, 90);
+  const backward = panoramas[1].hotSpots.find((hotspot) => hotspot.cssClass === 'nav-hotspot back');
+  const forward = panoramas[1].hotSpots.find((hotspot) => hotspot.cssClass === 'nav-hotspot');
+  assert.equal(backward.yaw, -90);
+  assert.equal(forward.yaw, 90);
+  forward.clickHandlerFunc();
+  assert.equal(run('state.viewerPin.id'), 'three');
+  assert.equal(panoramas[2].yaw, 90);
+  assert.equal(panoramas[2].hotSpots[0].yaw, -90);
+  panoramas[2].yaw = -90;
+  panoramas[2].hotSpots[0].clickHandlerFunc();
+  assert.equal(run('state.viewerPin.id'), 'two');
+  assert.equal(panoramas[3].yaw, -90);
+  assert.equal(run('state.project.pins[1].heading'), 90);
+  assert.equal(run('state.project.pins[0].heading'), 0);
+});
+
 test('viewing history never turns the forward destination white on the first capture', () => {
   const { panoramas, run } = loadFloorplan({ panorama: true });
   run("state.project = { pins: [{ id: 'one', position_x: 0.2, position_y: 0.5, photo_key: 'one.jpg', media_type: 'insta360' }, { id: 'two', position_x: 0.4, position_y: 0.5, photo_key: 'two.jpg', media_type: 'insta360' }] }; openCapture(state.project.pins[1], 2); openCapture(state.project.pins[0], 1);");
@@ -157,21 +179,22 @@ test('switching projects clears the previous drawing, walking and editing state'
 });
 
 test('opening a native capture automatically processes and opens its preview once', async () => {
-  const { element, run } = loadFloorplan();
+  const { panoramas, run } = loadFloorplan({ panorama: true });
   run(`
     globalThis.requests = [];
-    state.project = { id: 'project', pins: [{ id: 'native', native_file_key: 'capture.insp', position_x: 0.4, position_y: 0.5 }] };
+    state.project = { id: 'project', pins: [{ id: 'native', native_file_key: 'capture.insp', position_x: 0.4, position_y: 0.5, media_type: 'insta360' }] };
     apiRequest = async (url, options = {}) => {
       requests.push({ url, method: options.method || 'GET' });
       return url.endsWith('/process') ? {} : { preview_url: '/media/preview.jpg' };
     };
-    openCapture(state.project.pins[0], 1);
+    openCapture(state.project.pins[0], 1, -90);
   `);
   await new Promise(setImmediate);
   assert.equal(run('requests.length'), 2);
   assert.equal(run('requests[0].method'), 'POST');
   assert.equal(run('requests[0].url'), '/projects/project/pins/native/process');
-  assert.equal(element('plain-preview').src, '/media/preview.jpg');
+  assert.equal(panoramas[0].panorama, '/media/preview.jpg');
+  assert.equal(panoramas[0].yaw, -90);
   assert.equal(run('state.previewGeneration.size'), 0);
   run('openCapture(state.project.pins[0], 1)');
   assert.equal(run('requests.length'), 2);
