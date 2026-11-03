@@ -305,7 +305,6 @@ function openCapture(pin, number) {
   stopArrowLoop(); clearNavArrows();
   if (imageUrl && window.pannellum && pin.media_type === 'insta360') {
     state.viewer = pannellum.viewer('panorama', { type: 'equirectangular', panorama: imageUrl, autoLoad: true, yaw: 0, hotSpots: buildNavHotspots(pin) });
-    updateNavArrows(pin);
   }
   else if (imageUrl) { byId('panorama').style.display = 'none'; byId('plain-preview').src = imageUrl; byId('plain-preview').style.display = 'block'; updateNavArrows(pin); }
   else {
@@ -339,11 +338,9 @@ function navTargets(pin) {
   const targets = [];
   const idx = pins.indexOf(pin);
   const prevPin = idx > 0 ? pins[idx - 1] : null;
-  const backId = state.navHistory.length >= 2 ? state.navHistory[state.navHistory.length - 2] : null;
-  const backPin = (backId ? pins.find((p) => p.id === backId) : null) || prevPin;
-  if (backPin) targets.push({ pin: backPin, back: true });
+  if (prevPin) targets.push({ pin: prevPin, back: true });
   const nextPin = (idx >= 0 && idx < pins.length - 1) ? pins[idx + 1] : null;
-  if (nextPin && (!backPin || nextPin.id !== backPin.id)) targets.push({ pin: nextPin, back: false });
+  if (nextPin) targets.push({ pin: nextPin, back: false });
   return targets;
 }
 
@@ -357,15 +354,24 @@ function buildNavHotspots(pin) {
       type: 'custom',
       cssClass: back ? 'nav-hotspot back' : 'nav-hotspot',
       createTooltipFunc: createFloorArrow,
-      createTooltipArgs: back,
+      createTooltipArgs: { back, number: state.project.pins.indexOf(target) + 1 },
       clickHandlerFunc: () => navigateCapture(target, back),
     };
   });
 }
 
-function createFloorArrow(div) {
+function createFloorArrow(div, { back, number } = {}) {
   const arrow = document.createElement('span');
   arrow.className = 'floor-arrow';
+  div.setAttribute('role', 'button');
+  div.setAttribute('tabindex', '0');
+  div.setAttribute('aria-label', `${back ? 'Back' : 'Forward'} to capture #${number}`);
+  for (const eventName of ['mousedown', 'pointerdown', 'touchstart']) {
+    div.addEventListener(eventName, (event) => event.stopPropagation());
+  }
+  div.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); div.click(); }
+  });
   div.appendChild(arrow);
 }
 
@@ -383,22 +389,20 @@ function currentViewYaw(pin) {
 
 function updateNavArrows(pin) {
   clearNavArrows();
+  if (state.viewer) return;
   const container = byId('capture-media');
   const viewYaw = currentViewYaw(pin);
   const halfFov = 90;
   navTargets(pin).forEach(({ pin: target, back }) => {
-    if (state.viewer && !back) return;
     const bearing = bearingBetween(pin, target);
     const rel = ((bearing - viewYaw) % 360 + 360) % 360;
     const signed = rel > 180 ? rel - 360 : rel;
-    if (!back && Math.abs(signed) > halfFov) return;
+    if (Math.abs(signed) > halfFov) return;
     const arrow = document.createElement('button');
     arrow.type = 'button'; arrow.className = `nav-arrow${back ? ' back' : ''}`; arrow.title = back ? 'Back to previous capture' : `Go to capture (heading ${Math.round(bearing)}°)`;
     arrow.setAttribute('aria-label', arrow.title);
-    arrow.innerHTML = '<span class="tip"></span>';
-    arrow.style.left = back ? '50%' : `${50 + (signed / halfFov) * 45}%`;
-    if (back) arrow.style.top = '85%';
-    arrow.querySelector('.tip').style.transform = `rotate(${back ? 180 : signed}deg)`;
+    arrow.innerHTML = '<span class="floor-arrow"></span>';
+    arrow.style.left = `${50 + (signed / halfFov) * 45}%`;
     arrow.addEventListener('click', (event) => { event.stopPropagation(); navigateCapture(target, back); });
     container.appendChild(arrow);
   });
@@ -420,7 +424,8 @@ function stepViewer(direction) {
   const pins = viewerPins(); if (!pins.length) return;
   const currentPin = state.project.pins[state.viewerIndex];
   const idx = pins.indexOf(currentPin);
-  const nextIdx = (idx + direction + pins.length) % pins.length;
+  const nextIdx = idx + direction;
+  if (idx < 0 || nextIdx < 0 || nextIdx >= pins.length) return;
   const target = pins[nextIdx];
   openCapture(target, state.project.pins.indexOf(target) + 1);
 }
@@ -429,6 +434,9 @@ function updateNavButtons() {
   const has = viewerPins().length > 1;
   byId('prev-capture').style.display = has ? 'inline-flex' : 'none';
   byId('next-capture').style.display = has ? 'inline-flex' : 'none';
+  const targets = state.viewerPin ? navTargets(state.viewerPin) : [];
+  byId('prev-capture').disabled = !targets.some((target) => target.back);
+  byId('next-capture').disabled = !targets.some((target) => !target.back);
 }
 
 function handleViewerClick(event) {

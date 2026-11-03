@@ -20,6 +20,7 @@ function loadFloorplan({ panorama = false } = {}) {
       setAttribute(name, value) { this[name] = value; },
       remove() { if (this.parent) this.parent.children = this.parent.children.filter((child) => child !== this); },
       click() { listeners.get('click')?.({ stopPropagation() {}, target: this }); },
+      dispatchEvent(event) { listeners.get(event.type)?.(event); },
     };
     created.push(node);
     return node;
@@ -28,7 +29,8 @@ function loadFloorplan({ panorama = false } = {}) {
     if (!elements.has(id)) elements.set(id, createElement());
     return elements.get(id);
   }
-  const pannellum = { viewer: () => ({ destroy() {}, getYaw: () => 0 }) };
+  const panoramas = [];
+  const pannellum = { viewer: (id, config) => { panoramas.push(config); return { destroy() {}, getYaw: () => 0 }; } };
   const context = vm.createContext({
     URLSearchParams,
     pannellum,
@@ -37,8 +39,8 @@ function loadFloorplan({ panorama = false } = {}) {
   });
   const source = fs.readFileSync(path.join(__dirname, '../frontend/floorplan.js'), 'utf8');
   vm.runInContext(source.replace(/loadProjects\(\);\s*$/, ''), context);
-  vm.runInContext('renderWaypoints = () => {}; updateNavButtons = () => {};', context);
-  return { element, run: (code) => vm.runInContext(code, context) };
+  vm.runInContext('renderWaypoints = () => {};', context);
+  return { element, panoramas, run: (code) => vm.runInContext(code, context) };
 }
 
 test('opening a saved waypoint enables walking from its position', () => {
@@ -67,18 +69,51 @@ test('a capture without drawing coordinates does not enable walking', () => {
   assert.equal(run('state.current'), null);
 });
 
-for (const panorama of [false, true]) {
-  test(`white back arrow remains visible and clickable in ${panorama ? 'panorama' : 'regular preview'}`, () => {
-    const { element, run } = loadFloorplan({ panorama });
-    run("state.project = { pins: [{ id: 'one', position_x: 0.2, position_y: 0.5, heading: 90, photo_key: 'one.jpg', media_type: 'insta360' }, { id: 'two', position_x: 0.4, position_y: 0.5, heading: 90, photo_key: 'two.jpg', media_type: 'insta360' }] }; openCapture(state.project.pins[0], 1); openCapture(state.project.pins[1], 2);");
-    const arrows = element('capture-media').children.filter((node) => node.className === 'nav-arrow back');
-    assert.equal(arrows.length, 1);
-    arrows[0].click();
-    assert.equal(run('state.viewerPin.id'), 'one');
-    assert.equal(run('state.navHistory.length'), 1);
-    assert.equal(element('capture-media').children.filter((node) => node.className === 'nav-arrow back').length, 0);
-  });
-}
+test('panorama uses only anchored floor hotspots with reverse navigation', () => {
+  const { element, panoramas, run } = loadFloorplan({ panorama: true });
+  run("state.project = { pins: [{ id: 'one', position_x: 0.2, position_y: 0.5, heading: 90, photo_key: 'one.jpg', media_type: 'insta360' }, { id: 'two', position_x: 0.4, position_y: 0.5, heading: 90, photo_key: 'two.jpg', media_type: 'insta360' }] }; openCapture(state.project.pins[0], 1);");
+  assert.equal(panoramas[0].hotSpots.length, 1);
+  assert.equal(panoramas[0].hotSpots[0].cssClass, 'nav-hotspot');
+  assert.equal(element('prev-capture').disabled, true);
+  panoramas[0].hotSpots[0].clickHandlerFunc();
+  assert.equal(run('state.viewerPin.id'), 'two');
+  assert.equal(panoramas[1].hotSpots.length, 1);
+  assert.equal(panoramas[1].hotSpots[0].cssClass, 'nav-hotspot back');
+  assert.equal(element('next-capture').disabled, true);
+  assert.equal(element('capture-media').children.length, 0);
+  panoramas[1].hotSpots[0].clickHandlerFunc();
+  assert.equal(run('state.viewerPin.id'), 'one');
+  assert.equal(panoramas[2].hotSpots[0].cssClass, 'nav-hotspot');
+  assert.equal(panoramas[2].hotSpots.length, 1);
+});
+
+test('regular previews use the shared floor-arrow shape and direction filtering', () => {
+  const { element, run } = loadFloorplan();
+  run("state.project = { pins: [{ id: 'one', position_x: 0.2, position_y: 0.5, heading: 90, photo_key: 'one.jpg' }, { id: 'two', position_x: 0.4, position_y: 0.5, heading: 270, photo_key: 'two.jpg' }] }; openCapture(state.project.pins[0], 1);");
+  const forward = element('capture-media').children[0];
+  assert.equal(forward.className, 'nav-arrow');
+  assert.equal(forward.innerHTML, '<span class="floor-arrow"></span>');
+  forward.click();
+  const backward = element('capture-media').children[0];
+  assert.equal(backward.className, 'nav-arrow back');
+  assert.equal(backward.innerHTML, forward.innerHTML);
+  backward.click();
+  assert.equal(run('state.viewerPin.id'), 'one');
+});
+
+test('floor-arrow presses do not start panorama dragging', () => {
+  const { element, run } = loadFloorplan();
+  run("createFloorArrow(document.getElementById('hotspot'), { back: true, number: 1 })");
+  const hotspot = element('hotspot');
+  assert.equal(hotspot.role, 'button');
+  assert.equal(hotspot['aria-label'], 'Back to capture #1');
+  assert.equal(hotspot.children[0].className, 'floor-arrow');
+  for (const type of ['mousedown', 'pointerdown', 'touchstart']) {
+    let stopped = false;
+    hotspot.dispatchEvent({ type, stopPropagation() { stopped = true; } });
+    assert.equal(stopped, true, type);
+  }
+});
 
 test('panorama floor hotspots retain heading-relative forward and back bearings', () => {
   const { run } = loadFloorplan();
@@ -88,14 +123,24 @@ test('panorama floor hotspots retain heading-relative forward and back bearings'
   assert.equal(run('buildNavHotspots(state.project.pins[1])[1].yaw'), 0);
 });
 
-test('fallback backward navigation does not create a reverse forward-history entry', () => {
+test('viewing history never turns the forward destination white on the first capture', () => {
+  const { panoramas, run } = loadFloorplan({ panorama: true });
+  run("state.project = { pins: [{ id: 'one', position_x: 0.2, position_y: 0.5, photo_key: 'one.jpg', media_type: 'insta360' }, { id: 'two', position_x: 0.4, position_y: 0.5, photo_key: 'two.jpg', media_type: 'insta360' }] }; openCapture(state.project.pins[1], 2); openCapture(state.project.pins[0], 1);");
+  const hotspots = panoramas[1].hotSpots;
+  assert.equal(hotspots.length, 1);
+  assert.equal(hotspots[0].cssClass, 'nav-hotspot');
+  hotspots[0].clickHandlerFunc();
+  assert.equal(run('state.viewerPin.id'), 'two');
+});
+
+test('previous and next commands do not wrap across route endpoints', () => {
   const { element, run } = loadFloorplan();
-  run("state.project = { pins: [{ id: 'one', position_x: 0.2, position_y: 0.5, heading: 90, photo_key: 'one.jpg' }, { id: 'two', position_x: 0.4, position_y: 0.5, heading: 90, photo_key: 'two.jpg' }] }; openCapture(state.project.pins[1], 2);");
-  element('capture-media').children.find((node) => node.className === 'nav-arrow back').click();
+  run("state.project = { pins: [{ id: 'one', position_x: 0.2, position_y: 0.5 }, { id: 'two', position_x: 0.4, position_y: 0.5 }] }; openCapture(state.project.pins[0], 1); stepViewer(-1);");
   assert.equal(run('state.viewerPin.id'), 'one');
-  assert.equal(run('state.navHistory.length'), 1);
-  assert.equal(run('navTargets(state.viewerPin).length'), 1);
-  assert.equal(run('navTargets(state.viewerPin)[0].back'), false);
+  assert.equal(element('prev-capture').disabled, true);
+  run('stepViewer(1); stepViewer(1)');
+  assert.equal(run('state.viewerPin.id'), 'two');
+  assert.equal(element('next-capture').disabled, true);
 });
 
 test('switching projects clears the previous drawing, walking and editing state', async () => {
