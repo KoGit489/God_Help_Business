@@ -11,6 +11,17 @@ A Python-first construction field capture MVP with project review, sharing, and 
 - Optional production photo storage via local volume or S3
 - Containerized frontend + backend deployment setup
 
+## Automatic capture foundation
+
+Draft 1 includes an additive capture-session API for storing ordered GPS,
+heading and motion observations alongside uploaded preview/native capture
+events. A floor-plan calibration based on at least three non-collinear GPS/map
+anchors projects capture locations onto the drawing; finalization creates
+ordinary ordered pins for the existing viewer. The camera/GPS adapter, automatic
+capture cadence, indoor GPS quality handling and physical Insta360 SDK integration
+remain to be implemented and field-validated. See
+[`docs/capture-session-contract.md`](docs/capture-session-contract.md).
+
 ## Stack
 
 - FastAPI for the backend API

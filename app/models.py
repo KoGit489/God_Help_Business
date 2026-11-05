@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import Float, ForeignKey, String, Text
+from sqlalchemy import Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -19,6 +19,7 @@ class ProjectRecord(Base):
 
     pins: Mapped[list[PinRecord]] = relationship(back_populates="project", cascade="all, delete-orphan")
     share_links: Mapped[list[ShareLinkRecord]] = relationship(back_populates="project", cascade="all, delete-orphan")
+    capture_sessions: Mapped[list[CaptureSessionRecord]] = relationship(back_populates="project", cascade="all, delete-orphan")
 
 
 class PinRecord(Base):
@@ -70,3 +71,34 @@ class ShareLinkRecord(Base):
     project_id: Mapped[str] = mapped_column(String(64), ForeignKey("projects.id"), nullable=False, unique=True)
 
     project: Mapped[ProjectRecord] = relationship(back_populates="share_links")
+
+
+class CaptureSessionRecord(Base):
+    __tablename__ = "capture_sessions"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(64), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    floor_plan_key: Mapped[str] = mapped_column(String(500), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="recording")
+    started_at: Mapped[str] = mapped_column(String(64), nullable=False)
+    ended_at: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    calibration_json: Mapped[str] = mapped_column(Text, nullable=False)
+    device_metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    pin_ids_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    project: Mapped[ProjectRecord] = relationship(back_populates="capture_sessions")
+    events: Mapped[list[CaptureSessionEventRecord]] = relationship(back_populates="session", cascade="all, delete-orphan")
+
+
+class CaptureSessionEventRecord(Base):
+    __tablename__ = "capture_session_events"
+    __table_args__ = (UniqueConstraint("session_id", "sequence", name="uq_capture_session_event_sequence"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(64), ForeignKey("capture_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    event_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    observed_at: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False)
+
+    session: Mapped[CaptureSessionRecord] = relationship(back_populates="events")

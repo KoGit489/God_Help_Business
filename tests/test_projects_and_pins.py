@@ -1,5 +1,9 @@
+import json
+
+import pytest
 from fastapi.testclient import TestClient
 
+from app.capture_sessions import fit_floor_plan_transform, project_gps_to_floor_plan
 from app.main import app, reset_demo_store
 
 
@@ -1061,6 +1065,111 @@ def test_process_endpoint_runs_slam_on_uploaded_insv_and_stores_route(monkeypatc
     assert len(updated["waypoints"]) == 2
     assert updated["auto_position_x"] is not None
     assert updated["auto_position_y"] is not None
+
+
+def test_capture_session_finalizes_timestamped_frames_as_ordered_floor_plan_pins() -> None:
+    reset_demo_store()
+    project = client.post("/projects", json={"title": "Automatic Capture Session"}).json()
+    project_id = project["id"]
+    floor_plan_key = f"floorplans/{project_id}/first-floor.png"
+    anchors = [
+        {"latitude": 0.0, "longitude": 0.0, "position_x": 0.0, "position_y": 0.0},
+        {"latitude": 0.0, "longitude": 0.001, "position_x": 1.0, "position_y": 0.0},
+        {"latitude": 0.001, "longitude": 0.0, "position_x": 0.0, "position_y": 1.0},
+    ]
+    created = client.post(
+        f"/projects/{project_id}/capture-sessions",
+        json={"floor_plan_key": floor_plan_key, "calibration_anchors": anchors, "device_metadata": {"camera": "adapter-fixture"}},
+    )
+    assert created.status_code == 201
+    session_id = created.json()["id"]
+    session_route = f"/projects/{project_id}/capture-sessions/{session_id}"
+
+    observations = client.post(
+        session_route + "/observations",
+        json={"samples": [
+            {"sequence": 1, "observed_at": "2026-11-05T10:00:00Z", "latitude": 0.00025, "longitude": 0.00025, "horizontal_accuracy_m": 0.8, "heading_deg": 90},
+            {"sequence": 2, "observed_at": "2026-11-05T10:00:01Z", "heading_deg": 92, "heading_accuracy_deg": 3},
+        ]},
+    )
+    assert observations.status_code == 200
+
+    for sequence, timestamp, latitude, longitude in [
+        (3, "2026-11-05T10:00:02Z", 0.00025, 0.00025),
+        (5, "2026-11-05T10:00:05Z", 0.0005, 0.00075),
+    ]:
+        metadata = {
+            "sequence": sequence,
+            "captured_at": timestamp,
+            "latitude": latitude,
+            "longitude": longitude,
+            "horizontal_accuracy_m": 0.7,
+            "heading_deg": 90 if sequence == 3 else 100,
+            "telemetry": {"frame_id": f"frame-{sequence}"},
+        }
+        upload = client.post(
+            session_route + "/captures",
+            data={"metadata_json": json.dumps(metadata)},
+            files={"file": (f"frame-{sequence}.jpg", b"jpeg-frame-fixture", "image/jpeg")},
+        )
+        assert upload.status_code == 201
+        if sequence == 3:
+            assert client.post(
+                session_route + "/observations",
+                json={"samples": [{"sequence": 4, "observed_at": "2026-11-05T10:00:04Z", "latitude": 0.0005, "longitude": 0.00075, "horizontal_accuracy_m": 0.7, "heading_deg": 100}]},
+            ).status_code == 200
+
+    finalized = client.post(session_route + "/finalize")
+    assert finalized.status_code == 200
+    pins = finalized.json()["pins"]
+    assert len(pins) == 2
+    assert [pin["telemetry"]["capture_session"]["sequence"] for pin in pins] == [3, 5]
+    assert pins[0]["position_x"] == pytest.approx(0.25, abs=1e-4)
+    assert pins[0]["position_y"] == pytest.approx(0.25, abs=1e-4)
+    assert pins[1]["position_x"] == pytest.approx(0.75, abs=1e-4)
+    assert pins[1]["position_y"] == pytest.approx(0.5, abs=1e-4)
+    assert [pin["heading"] for pin in pins] == [90, 100]
+    project_pins = client.get(f"/projects/{project_id}/review").json()["pins"]
+    assert [pin["id"] for pin in project_pins] == [pin["id"] for pin in pins]
+    assert client.post(session_route + "/finalize").json()["pins"] == pins
+
+
+def test_capture_session_rejects_duplicate_sequences_and_unzoned_timestamps() -> None:
+    reset_demo_store()
+    project = client.post("/projects", json={"title": "Capture Session Validation"}).json()
+    project_id = project["id"]
+    anchors = [
+        {"latitude": 0.0, "longitude": 0.0, "position_x": 0.0, "position_y": 0.0},
+        {"latitude": 0.0, "longitude": 0.001, "position_x": 1.0, "position_y": 0.0},
+        {"latitude": 0.001, "longitude": 0.0, "position_x": 0.0, "position_y": 1.0},
+    ]
+    session = client.post(
+        f"/projects/{project_id}/capture-sessions",
+        json={"floor_plan_key": f"floorplans/{project_id}/plan.png", "calibration_anchors": anchors},
+    ).json()
+    route = f"/projects/{project_id}/capture-sessions/{session['id']}/observations"
+    first = {"sequence": 1, "observed_at": "2026-11-05T10:00:00Z", "latitude": 0.0, "longitude": 0.0}
+    assert client.post(route, json={"samples": [first]}).status_code == 200
+    assert client.post(route, json={"samples": [first]}).status_code == 409
+    unzoned = {**first, "sequence": 2, "observed_at": "2026-11-05T10:00:01"}
+    assert client.post(route, json={"samples": [unzoned]}).status_code == 422
+
+
+def test_floor_plan_gps_transform_maps_anchors_and_rejects_collinear_anchors() -> None:
+    anchors = [
+        {"latitude": 0.0, "longitude": 0.0, "position_x": 0.0, "position_y": 0.0},
+        {"latitude": 0.0, "longitude": 0.001, "position_x": 1.0, "position_y": 0.0},
+        {"latitude": 0.001, "longitude": 0.0, "position_x": 0.0, "position_y": 1.0},
+    ]
+    transform = fit_floor_plan_transform(anchors)
+    assert project_gps_to_floor_plan(transform, 0.0, 0.001) == pytest.approx((1.0, 0.0), abs=1e-8)
+    assert project_gps_to_floor_plan(transform, 0.001, 0.0) == pytest.approx((0.0, 1.0), abs=1e-8)
+    with pytest.raises(ValueError, match="two-dimensional area"):
+        fit_floor_plan_transform([
+            {"latitude": 0.0, "longitude": 0.0, "position_x": 0.0, "position_y": 0.0},
+            {"latitude": 0.0, "longitude": 0.001, "position_x": 0.5, "position_y": 0.5},
+            {"latitude": 0.0, "longitude": 0.002, "position_x": 1.0, "position_y": 1.0},
+        ])
 
 
 def test_slam_extracts_frames_from_video() -> None:

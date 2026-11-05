@@ -6,12 +6,13 @@ import os
 import shutil
 import tempfile
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
@@ -23,7 +24,8 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.camera_adapter import Insta360CameraAdapter
 from app.capture_processing import CaptureProcessor
-from app.models import AnnotationRecord, Base, PinRecord, ProjectRecord, ShareLinkRecord
+from app.capture_sessions import fit_floor_plan_transform, project_gps_to_floor_plan
+from app.models import AnnotationRecord, Base, CaptureSessionEventRecord, CaptureSessionRecord, PinRecord, ProjectRecord, ShareLinkRecord
 
 load_dotenv()
 
@@ -149,6 +151,84 @@ class PinResponse(BaseModel):
     thumbnail_key: str | None = None
 
 
+class FloorPlanCalibrationAnchor(BaseModel):
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+    position_x: float = Field(ge=0, le=1)
+    position_y: float = Field(ge=0, le=1)
+
+
+class CaptureSessionCreateRequest(BaseModel):
+    floor_plan_key: str = Field(min_length=1, max_length=500)
+    calibration_anchors: list[FloorPlanCalibrationAnchor] = Field(min_length=3, max_length=100)
+    device_metadata: dict[str, Any] | None = None
+
+
+class CaptureSessionResponse(BaseModel):
+    id: str
+    project_id: str
+    floor_plan_key: str
+    status: str
+    started_at: str
+    ended_at: str | None = None
+    calibration: dict[str, Any]
+    device_metadata: dict[str, Any] | None = None
+    event_count: int = 0
+    capture_count: int = 0
+    pin_ids: list[str] = Field(default_factory=list)
+
+
+class CaptureSensorSample(BaseModel):
+    sequence: int = Field(ge=0)
+    observed_at: datetime
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+    horizontal_accuracy_m: float | None = Field(default=None, ge=0)
+    heading_deg: float | None = Field(default=None, ge=0, le=360)
+    heading_accuracy_deg: float | None = Field(default=None, ge=0, le=180)
+    pitch_deg: float | None = Field(default=None, ge=-180, le=180)
+    roll_deg: float | None = Field(default=None, ge=-180, le=180)
+    accelerometer_mps2: dict[str, float] | None = None
+    gyroscope_rads: dict[str, float] | None = None
+    position_x: float | None = Field(default=None, ge=0, le=1)
+    position_y: float | None = Field(default=None, ge=0, le=1)
+
+
+class CaptureSensorBatch(BaseModel):
+    samples: list[CaptureSensorSample] = Field(min_length=1, max_length=1000)
+
+
+class CaptureEventUploadMetadata(BaseModel):
+    sequence: int = Field(ge=0)
+    captured_at: datetime
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+    horizontal_accuracy_m: float | None = Field(default=None, ge=0)
+    heading_deg: float | None = Field(default=None, ge=0, le=360)
+    position_x: float | None = Field(default=None, ge=0, le=1)
+    position_y: float | None = Field(default=None, ge=0, le=1)
+    telemetry: dict[str, Any] | None = None
+
+
+class CaptureSessionFinalizeResponse(BaseModel):
+    session: CaptureSessionResponse
+    pins: list[PinResponse]
+
+
+class CaptureSessionEventResponse(BaseModel):
+    id: str
+    session_id: str
+    sequence: int
+    event_type: str
+    observed_at: str
+    media_key: str | None = None
+
+
+class CaptureSensorBatchResponse(BaseModel):
+    session: CaptureSessionResponse
+    accepted_sequences: list[int]
+
+
 class AnnotationCreateRequest(BaseModel):
     body: str = Field(min_length=1, max_length=1000)
     floor_plan_x: float = Field(ge=0, le=1)
@@ -229,6 +309,7 @@ annotations_by_project: dict[str, list[dict[str, Any]]] = {}
 annotations_by_id: dict[str, dict[str, Any]] = {}
 project_share_tokens: dict[str, str] = {}
 share_token_to_project: dict[str, str] = {}
+capture_sessions_by_id: dict[str, dict[str, Any]] = {}
 
 
 @app.middleware("http")
@@ -292,9 +373,12 @@ def reset_demo_store() -> None:
     annotations_by_id.clear()
     project_share_tokens.clear()
     share_token_to_project.clear()
+    capture_sessions_by_id.clear()
 
     if PERSISTENCE_MODE == "database":
         with SessionLocal() as db:
+            db.query(CaptureSessionEventRecord).delete()
+            db.query(CaptureSessionRecord).delete()
             db.query(ShareLinkRecord).delete()
             db.query(AnnotationRecord).delete()
             db.query(PinRecord).delete()
@@ -500,6 +584,16 @@ def _pin_response_from_memory(pin: dict[str, Any]) -> PinResponse:
     )
 
 
+def _pin_response_order_key(pin: PinResponse) -> tuple[str, str, int, str]:
+    session_capture = (pin.telemetry or {}).get("capture_session", {})
+    return (
+        pin.captured_on,
+        session_capture.get("captured_at", ""),
+        int(session_capture.get("sequence", -1)),
+        pin.id,
+    )
+
+
 def _annotation_response_from_record(record: AnnotationRecord) -> AnnotationResponse:
     return AnnotationResponse(
         id=record.id,
@@ -532,6 +626,7 @@ def _project_response_from_record(db: Session, record: ProjectRecord) -> Project
 def _project_detail_from_record(db: Session, record: ProjectRecord) -> ProjectDetailResponse:
     pins = db.query(PinRecord).filter(PinRecord.project_id == record.id).all()
     pin_items = [_pin_response_from_record(pin) for pin in pins]
+    pin_items.sort(key=_pin_response_order_key)
     return ProjectDetailResponse(
         id=record.id,
         title=record.title,
@@ -778,6 +873,564 @@ def capture_processing_status() -> dict[str, object]:
         "capabilities": list(status.capabilities),
         "message": status.message,
     }
+
+
+def _capture_timestamp(value: datetime) -> str:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise HTTPException(status_code=422, detail="Capture timestamps must include a timezone.")
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _session_events_from_records(events: list[CaptureSessionEventRecord]) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": event.id,
+            "sequence": event.sequence,
+            "event_type": event.event_type,
+            "observed_at": event.observed_at,
+            "payload": json.loads(event.payload_json),
+        }
+        for event in events
+    ]
+
+
+def _session_response(
+    session_id: str,
+    project_id: str,
+    floor_plan_key: str,
+    status: str,
+    started_at: str,
+    ended_at: str | None,
+    calibration: dict[str, Any],
+    device_metadata: dict[str, Any] | None,
+    events: list[dict[str, Any]],
+    pin_ids: list[str],
+) -> CaptureSessionResponse:
+    return CaptureSessionResponse(
+        id=session_id,
+        project_id=project_id,
+        floor_plan_key=floor_plan_key,
+        status=status,
+        started_at=started_at,
+        ended_at=ended_at,
+        calibration=calibration,
+        device_metadata=device_metadata,
+        event_count=len(events),
+        capture_count=sum(event["event_type"] == "capture" for event in events),
+        pin_ids=pin_ids,
+    )
+
+
+def _validate_new_event_sequences(existing: list[dict[str, Any]], new_sequences: list[int]) -> None:
+    if new_sequences != sorted(new_sequences) or len(set(new_sequences)) != len(new_sequences):
+        raise HTTPException(status_code=422, detail="Event sequences in a batch must be strictly increasing.")
+    last_sequence = max((event["sequence"] for event in existing), default=-1)
+    if new_sequences and new_sequences[0] <= last_sequence:
+        raise HTTPException(status_code=409, detail="Event sequence must be greater than the last stored session event.")
+
+
+def _store_capture_session_file(
+    project_id: str, session_id: str, sequence: int, upload: UploadFile
+) -> tuple[str, str]:
+    filename = Path(upload.filename or "capture.bin").name
+    suffix = Path(filename).suffix.lower()
+    image_suffixes = {".jpg", ".jpeg", ".png", ".webp"}
+    native_suffixes = {".insp", ".insv", ".mp4"}
+    if suffix not in image_suffixes | native_suffixes:
+        raise HTTPException(status_code=415, detail="Capture files must be JPG, PNG, WebP, INSP, INSV, or MP4.")
+
+    media_id = str(uuid4())
+    media_key = f"uploads/{project_id}/sessions/{session_id}/{sequence}/{media_id}/{filename}"
+    media_type = "insta360" if suffix in native_suffixes else "photo"
+    if STORAGE_BACKEND == "s3":
+        _upload_s3_fileobj(upload.file, media_key, upload.content_type)
+    else:
+        destination = UPLOAD_DIR / media_key.removeprefix("uploads/")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        upload.file.seek(0)
+        with destination.open("wb") as handle:
+            shutil.copyfileobj(upload.file, handle)
+    return media_key, media_type
+
+
+@app.post(
+    "/projects/{project_id}/capture-sessions",
+    response_model=CaptureSessionResponse,
+    status_code=201,
+    tags=["capture-sessions"],
+)
+def create_capture_session(
+    project_id: str, payload: CaptureSessionCreateRequest, request: Request
+) -> CaptureSessionResponse:
+    _ensure_project_ownership(project_id, _get_user_id(request))
+    expected_prefix = f"floorplans/{project_id}/"
+    if not payload.floor_plan_key.startswith(expected_prefix):
+        raise HTTPException(status_code=422, detail="The floor plan must belong to this project.")
+    try:
+        calibration = fit_floor_plan_transform(
+            [anchor.model_dump(mode="json") for anchor in payload.calibration_anchors]
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    session_id = str(uuid4())
+    started_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    device_metadata = payload.device_metadata
+    if PERSISTENCE_MODE == "database":
+        with SessionLocal() as db:
+            if not db.get(ProjectRecord, project_id):
+                raise HTTPException(status_code=404, detail="Project not found")
+            session_record = CaptureSessionRecord(
+                id=session_id,
+                project_id=project_id,
+                floor_plan_key=payload.floor_plan_key,
+                status="recording",
+                started_at=started_at,
+                calibration_json=json.dumps(calibration),
+                device_metadata_json=json.dumps(device_metadata) if device_metadata is not None else None,
+            )
+            db.add(session_record)
+            db.commit()
+        return _session_response(session_id, project_id, payload.floor_plan_key, "recording", started_at, None, calibration, device_metadata, [], [])
+
+    if project_id not in projects:
+        raise HTTPException(status_code=404, detail="Project not found")
+    capture_sessions_by_id[session_id] = {
+        "id": session_id,
+        "project_id": project_id,
+        "floor_plan_key": payload.floor_plan_key,
+        "status": "recording",
+        "started_at": started_at,
+        "ended_at": None,
+        "calibration": calibration,
+        "device_metadata": device_metadata,
+        "events": [],
+        "pin_ids": [],
+    }
+    return _session_response(session_id, project_id, payload.floor_plan_key, "recording", started_at, None, calibration, device_metadata, [], [])
+
+
+def _capture_session_or_404(session_id: str, project_id: str, db: Session | None = None) -> CaptureSessionRecord | dict[str, Any]:
+    if db is not None:
+        session_record = db.get(CaptureSessionRecord, session_id)
+        if not session_record or session_record.project_id != project_id:
+            raise HTTPException(status_code=404, detail="Capture session not found")
+        return session_record
+    session_data = capture_sessions_by_id.get(session_id)
+    if not session_data or session_data["project_id"] != project_id:
+        raise HTTPException(status_code=404, detail="Capture session not found")
+    return session_data
+
+
+@app.get(
+    "/projects/{project_id}/capture-sessions/{session_id}",
+    response_model=CaptureSessionResponse,
+    tags=["capture-sessions"],
+)
+def get_capture_session(project_id: str, session_id: str, request: Request) -> CaptureSessionResponse:
+    _ensure_project_ownership(project_id, _get_user_id(request))
+    if PERSISTENCE_MODE == "database":
+        with SessionLocal() as db:
+            session_record = _capture_session_or_404(session_id, project_id, db)
+            events = db.query(CaptureSessionEventRecord).filter(
+                CaptureSessionEventRecord.session_id == session_id
+            ).order_by(CaptureSessionEventRecord.sequence).all()
+            event_data = _session_events_from_records(events)
+            return _session_response(
+                session_record.id, session_record.project_id, session_record.floor_plan_key,
+                session_record.status, session_record.started_at, session_record.ended_at,
+                json.loads(session_record.calibration_json),
+                json.loads(session_record.device_metadata_json) if session_record.device_metadata_json else None,
+                event_data, json.loads(session_record.pin_ids_json) if session_record.pin_ids_json else [],
+            )
+
+    session_data = _capture_session_or_404(session_id, project_id)
+    return _session_response(
+        session_data["id"], project_id, session_data["floor_plan_key"], session_data["status"],
+        session_data["started_at"], session_data["ended_at"], session_data["calibration"],
+        session_data["device_metadata"], session_data["events"], session_data["pin_ids"],
+    )
+
+
+@app.post(
+    "/projects/{project_id}/capture-sessions/{session_id}/observations",
+    response_model=CaptureSensorBatchResponse,
+    tags=["capture-sessions"],
+)
+def add_capture_observations(
+    project_id: str, session_id: str, payload: CaptureSensorBatch, request: Request
+) -> CaptureSensorBatchResponse:
+    _ensure_project_ownership(project_id, _get_user_id(request))
+    samples = payload.samples
+    sequences = [sample.sequence for sample in samples]
+    if sequences != sorted(sequences) or len(set(sequences)) != len(sequences):
+        raise HTTPException(status_code=422, detail="Observation sequences in a batch must be strictly increasing.")
+    for sample in samples:
+        if (sample.latitude is None) != (sample.longitude is None):
+            raise HTTPException(status_code=422, detail="Latitude and longitude must be supplied together.")
+        if (sample.position_x is None) != (sample.position_y is None):
+            raise HTTPException(status_code=422, detail="Floor-plan x and y must be supplied together.")
+        if sample.latitude is None and sample.heading_deg is None and sample.accelerometer_mps2 is None and sample.gyroscope_rads is None:
+            raise HTTPException(status_code=422, detail="Each observation must contain a location or sensor measurement.")
+        _capture_timestamp(sample.observed_at)
+
+    if PERSISTENCE_MODE == "database":
+        with SessionLocal() as db:
+            session_record = _capture_session_or_404(session_id, project_id, db)
+            if session_record.status != "recording":
+                raise HTTPException(status_code=409, detail="Capture session is not recording.")
+            existing_records = db.query(CaptureSessionEventRecord).filter(
+                CaptureSessionEventRecord.session_id == session_id
+            ).order_by(CaptureSessionEventRecord.sequence).all()
+            existing = _session_events_from_records(existing_records)
+            _validate_new_event_sequences(existing, sequences)
+            for sample in samples:
+                sample_data = sample.model_dump(mode="json")
+                sample_data["observed_at"] = _capture_timestamp(sample.observed_at)
+                db.add(CaptureSessionEventRecord(
+                    id=str(uuid4()), session_id=session_id, sequence=sample.sequence,
+                    event_type="sensor", observed_at=sample_data["observed_at"],
+                    payload_json=json.dumps(sample_data),
+                ))
+            db.commit()
+            events = db.query(CaptureSessionEventRecord).filter(
+                CaptureSessionEventRecord.session_id == session_id
+            ).order_by(CaptureSessionEventRecord.sequence).all()
+            session_response = _session_response(
+                session_record.id, project_id, session_record.floor_plan_key, session_record.status,
+                session_record.started_at, session_record.ended_at,
+                json.loads(session_record.calibration_json),
+                json.loads(session_record.device_metadata_json) if session_record.device_metadata_json else None,
+                _session_events_from_records(events),
+                json.loads(session_record.pin_ids_json) if session_record.pin_ids_json else [],
+            )
+    else:
+        session_data = _capture_session_or_404(session_id, project_id)
+        if session_data["status"] != "recording":
+            raise HTTPException(status_code=409, detail="Capture session is not recording.")
+        _validate_new_event_sequences(session_data["events"], sequences)
+        for sample in samples:
+            sample_data = sample.model_dump(mode="json")
+            sample_data["observed_at"] = _capture_timestamp(sample.observed_at)
+            session_data["events"].append({
+                "id": str(uuid4()), "sequence": sample.sequence, "event_type": "sensor",
+                "observed_at": sample_data["observed_at"], "payload": sample_data,
+            })
+        session_response = _session_response(
+            session_data["id"], project_id, session_data["floor_plan_key"], session_data["status"],
+            session_data["started_at"], session_data["ended_at"], session_data["calibration"],
+            session_data["device_metadata"], session_data["events"], session_data["pin_ids"],
+        )
+    return CaptureSensorBatchResponse(session=session_response, accepted_sequences=sequences)
+
+
+@app.post(
+    "/projects/{project_id}/capture-sessions/{session_id}/captures",
+    response_model=CaptureSessionEventResponse,
+    status_code=201,
+    tags=["capture-sessions"],
+)
+def upload_capture_session_frame(
+    project_id: str,
+    session_id: str,
+    request: Request,
+    metadata_json: str = Form(...),
+    file: UploadFile = File(...),
+) -> CaptureSessionEventResponse:
+    _ensure_project_ownership(project_id, _get_user_id(request))
+    try:
+        metadata = CaptureEventUploadMetadata.model_validate_json(metadata_json)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Capture metadata must be valid JSON matching the capture schema.") from exc
+    if file.filename is None:
+        raise HTTPException(status_code=400, detail="A capture filename is required.")
+    if (metadata.latitude is None) != (metadata.longitude is None):
+        raise HTTPException(status_code=422, detail="Latitude and longitude must be supplied together.")
+    if (metadata.position_x is None) != (metadata.position_y is None):
+        raise HTTPException(status_code=422, detail="Floor-plan x and y must be supplied together.")
+    observed_at = _capture_timestamp(metadata.captured_at)
+
+    if PERSISTENCE_MODE == "database":
+        with SessionLocal() as db:
+            session_record = _capture_session_or_404(session_id, project_id, db)
+            if session_record.status != "recording":
+                raise HTTPException(status_code=409, detail="Capture session is not recording.")
+            existing_records = db.query(CaptureSessionEventRecord).filter(
+                CaptureSessionEventRecord.session_id == session_id
+            ).order_by(CaptureSessionEventRecord.sequence).all()
+            existing = _session_events_from_records(existing_records)
+            _validate_new_event_sequences(existing, [metadata.sequence])
+            media_key, media_type = _store_capture_session_file(project_id, session_id, metadata.sequence, file)
+            payload = metadata.model_dump(mode="json")
+            payload.update({
+                "captured_at": observed_at,
+                "media_type": media_type,
+                "photo_key": media_key if media_type == "photo" else None,
+                "native_file_key": media_key if media_type == "insta360" else None,
+            })
+            event = CaptureSessionEventRecord(
+                id=str(uuid4()), session_id=session_id, sequence=metadata.sequence,
+                event_type="capture", observed_at=observed_at, payload_json=json.dumps(payload),
+            )
+            db.add(event)
+            db.commit()
+            return CaptureSessionEventResponse(
+                id=event.id, session_id=session_id, sequence=event.sequence,
+                event_type=event.event_type, observed_at=event.observed_at, media_key=media_key,
+            )
+
+    session_data = _capture_session_or_404(session_id, project_id)
+    if session_data["status"] != "recording":
+        raise HTTPException(status_code=409, detail="Capture session is not recording.")
+    _validate_new_event_sequences(session_data["events"], [metadata.sequence])
+    media_key, media_type = _store_capture_session_file(project_id, session_id, metadata.sequence, file)
+    payload = metadata.model_dump(mode="json")
+    payload.update({
+        "captured_at": observed_at,
+        "media_type": media_type,
+        "photo_key": media_key if media_type == "photo" else None,
+        "native_file_key": media_key if media_type == "insta360" else None,
+    })
+    event_id = str(uuid4())
+    session_data["events"].append({
+        "id": event_id, "sequence": metadata.sequence, "event_type": "capture",
+        "observed_at": observed_at, "payload": payload,
+    })
+    return CaptureSessionEventResponse(
+        id=event_id, session_id=session_id, sequence=metadata.sequence,
+        event_type="capture", observed_at=observed_at, media_key=media_key,
+    )
+
+
+def _prepare_session_pins(
+    session_id: str,
+    project_id: str,
+    floor_plan_key: str,
+    calibration: dict[str, Any],
+    events: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    ordered_events = sorted(events, key=lambda event: event["sequence"])
+    sensor_events = [event for event in ordered_events if event["event_type"] == "sensor"]
+    capture_events = [event for event in ordered_events if event["event_type"] == "capture"]
+    if not capture_events:
+        raise HTTPException(status_code=409, detail="The recording has no uploaded capture images to finalize.")
+
+    prepared_pins: list[dict[str, Any]] = []
+    for capture in capture_events:
+        payload = capture["payload"]
+        previous_sensors = [sample for sample in sensor_events if sample["sequence"] < capture["sequence"]]
+        latest_location = next(
+            (sample["payload"] for sample in reversed(previous_sensors)
+             if sample["payload"].get("latitude") is not None and sample["payload"].get("longitude") is not None),
+            {},
+        )
+        latest_pose = next(
+            (sample["payload"] for sample in reversed(previous_sensors)
+             if sample["payload"].get("position_x") is not None and sample["payload"].get("position_y") is not None),
+            {},
+        )
+
+        latitude = payload.get("latitude")
+        if latitude is None:
+            latitude = latest_location.get("latitude")
+        longitude = payload.get("longitude")
+        if longitude is None:
+            longitude = latest_location.get("longitude")
+        if latitude is None or longitude is None:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Capture event {capture['sequence']} has no GPS fix; upload a location observation before finalizing.",
+            )
+
+        position_x = payload.get("position_x")
+        if position_x is None:
+            position_x = latest_pose.get("position_x")
+        position_y = payload.get("position_y")
+        if position_y is None:
+            position_y = latest_pose.get("position_y")
+        if position_x is None or position_y is None:
+            try:
+                position_x, position_y = project_gps_to_floor_plan(calibration, latitude, longitude)
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if not (0 <= position_x <= 1 and 0 <= position_y <= 1):
+            raise HTTPException(
+                status_code=422,
+                detail=f"Capture event {capture['sequence']} projects outside the calibrated floor plan.",
+            )
+
+        heading = payload.get("heading_deg")
+        if heading is None:
+            heading = next(
+                (sample["payload"].get("heading_deg") for sample in reversed(previous_sensors)
+                 if sample["payload"].get("heading_deg") is not None),
+                0.0,
+            )
+        captured_at = payload.get("captured_at", capture["observed_at"])
+        captured_time = datetime.fromisoformat(captured_at.replace("Z", "+00:00"))
+        capture_telemetry = {
+            "capture_session": {
+                "id": session_id,
+                "sequence": capture["sequence"],
+                "captured_at": captured_at,
+                "floor_plan_key": floor_plan_key,
+            },
+            "gps": {
+                "latitude": latitude,
+                "longitude": longitude,
+                "horizontal_accuracy_m": payload.get("horizontal_accuracy_m", latest_location.get("horizontal_accuracy_m")),
+                "observation_sequence": next(
+                    (sample["sequence"] for sample in reversed(previous_sensors)
+                     if sample["payload"].get("latitude") is not None),
+                    None,
+                ),
+            },
+            "orientation": {
+                "heading_deg": heading,
+                "observation_sequence": next(
+                    (sample["sequence"] for sample in reversed(previous_sensors)
+                     if sample["payload"].get("heading_deg") is not None),
+                    None,
+                ),
+            },
+            "camera": payload.get("telemetry"),
+        }
+        calibration_data = {
+            "state": "auto_placed",
+            "source": "capture_session_floor_plan_calibration",
+            "floor_plan_key": floor_plan_key,
+            "anchor_count": calibration.get("anchor_count"),
+            "anchor_rms_error_normalized": calibration.get("anchor_rms_error_normalized"),
+        }
+        prepared_pins.append({
+            "id": str(uuid4()),
+            "project_id": project_id,
+            "latitude": float(latitude),
+            "longitude": float(longitude),
+            "heading": float(heading or 0.0),
+            "position_x": float(position_x),
+            "position_y": float(position_y),
+            "alignment_confidence": 0.0,
+            "calibration_data": calibration_data,
+            "telemetry": capture_telemetry,
+            "captured_on": captured_time.date().isoformat(),
+            "photo_key": payload.get("photo_key"),
+            "media_type": payload.get("media_type", "insta360"),
+            "native_file_key": payload.get("native_file_key"),
+            "thumbnail_key": None,
+        })
+    return prepared_pins
+
+
+@app.post(
+    "/projects/{project_id}/capture-sessions/{session_id}/finalize",
+    response_model=CaptureSessionFinalizeResponse,
+    tags=["capture-sessions"],
+)
+def finalize_capture_session(project_id: str, session_id: str, request: Request) -> CaptureSessionFinalizeResponse:
+    _ensure_project_ownership(project_id, _get_user_id(request))
+    if PERSISTENCE_MODE == "database":
+        with SessionLocal() as db:
+            session_record = _capture_session_or_404(session_id, project_id, db)
+            if session_record.status == "finalized":
+                pin_ids = json.loads(session_record.pin_ids_json or "[]")
+                finalized_pins_by_id = {pin.id: pin for pin in db.query(PinRecord).filter(PinRecord.id.in_(pin_ids)).all()}
+                pin_responses = [_pin_response_from_record(finalized_pins_by_id[pin_id]) for pin_id in pin_ids if pin_id in finalized_pins_by_id]
+                event_records = db.query(CaptureSessionEventRecord).filter(
+                    CaptureSessionEventRecord.session_id == session_id
+                ).order_by(CaptureSessionEventRecord.sequence).all()
+                session_response = _session_response(
+                    session_id, project_id, session_record.floor_plan_key, session_record.status,
+                    session_record.started_at, session_record.ended_at, json.loads(session_record.calibration_json),
+                    json.loads(session_record.device_metadata_json) if session_record.device_metadata_json else None,
+                    _session_events_from_records(event_records), pin_ids,
+                )
+                return CaptureSessionFinalizeResponse(session=session_response, pins=pin_responses)
+            if session_record.status != "recording":
+                raise HTTPException(status_code=409, detail="Capture session cannot be finalized in its current state.")
+
+            event_records = db.query(CaptureSessionEventRecord).filter(
+                CaptureSessionEventRecord.session_id == session_id
+            ).order_by(CaptureSessionEventRecord.sequence).all()
+            events = _session_events_from_records(event_records)
+            calibration = json.loads(session_record.calibration_json)
+            prepared_pins = _prepare_session_pins(
+                session_id, project_id, session_record.floor_plan_key, calibration, events
+            )
+            pin_records: list[PinRecord] = []
+            for pin_data in prepared_pins:
+                calibration_data = pin_data.pop("calibration_data")
+                telemetry = pin_data.pop("telemetry")
+                pin_record = PinRecord(
+                    **pin_data,
+                    telemetry_json=json.dumps(telemetry),
+                    calibration_json=json.dumps(calibration_data),
+                    processing_status="not_requested",
+                    processing_error=None,
+                )
+                db.add(pin_record)
+                pin_records.append(pin_record)
+            pin_ids = [pin.id for pin in pin_records]
+            ended_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            session_record.status = "finalized"
+            session_record.ended_at = ended_at
+            session_record.pin_ids_json = json.dumps(pin_ids)
+            db.commit()
+            session_response = _session_response(
+                session_id, project_id, session_record.floor_plan_key, session_record.status,
+                session_record.started_at, ended_at, calibration,
+                json.loads(session_record.device_metadata_json) if session_record.device_metadata_json else None,
+                events, pin_ids,
+            )
+            return CaptureSessionFinalizeResponse(
+                session=session_response,
+                pins=[_pin_response_from_record(pin) for pin in pin_records],
+            )
+
+    session_data = _capture_session_or_404(session_id, project_id)
+    if session_data["status"] == "finalized":
+        pins_by_id_local = {pin["id"]: pin for pin in pins_by_project.get(project_id, [])}
+        pins = [
+            _pin_response_from_memory(pins_by_id_local[pin_id])
+            for pin_id in session_data["pin_ids"] if pin_id in pins_by_id_local
+        ]
+        session_response = _session_response(
+            session_id, project_id, session_data["floor_plan_key"], session_data["status"],
+            session_data["started_at"], session_data["ended_at"], session_data["calibration"],
+            session_data["device_metadata"], session_data["events"], session_data["pin_ids"],
+        )
+        return CaptureSessionFinalizeResponse(session=session_response, pins=pins)
+    if session_data["status"] != "recording":
+        raise HTTPException(status_code=409, detail="Capture session cannot be finalized in its current state.")
+
+    prepared_pins = _prepare_session_pins(
+        session_id, project_id, session_data["floor_plan_key"], session_data["calibration"], session_data["events"]
+    )
+    pin_responses: list[PinResponse] = []
+    for pin_data in prepared_pins:
+        pin = {
+            **pin_data,
+            "preview_key": None,
+            "processing_status": "not_requested",
+            "processing_error": None,
+            "waypoints": None,
+        }
+        pin["calibration_state"] = pin_data["calibration_data"]["state"]
+        pin["telemetry"] = pin_data["telemetry"]
+        pin["calibration_data"] = pin_data["calibration_data"]
+        pins_by_project.setdefault(project_id, []).append(pin)
+        pins_by_id[pin["id"]] = pin
+        pin_responses.append(_pin_response_from_memory(pin))
+    ended_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    session_data["status"] = "finalized"
+    session_data["ended_at"] = ended_at
+    session_data["pin_ids"] = [pin.id for pin in pin_responses]
+    session_response = _session_response(
+        session_id, project_id, session_data["floor_plan_key"], session_data["status"],
+        session_data["started_at"], ended_at, session_data["calibration"],
+        session_data["device_metadata"], session_data["events"], session_data["pin_ids"],
+    )
+    return CaptureSessionFinalizeResponse(session=session_response, pins=pin_responses)
 
 
 @app.post("/projects/{project_id}/visual-odometry", tags=["capture-processing"])
@@ -1137,7 +1790,8 @@ def list_pins(project_id: str, request: Request) -> list[PinResponse]:
             if not project:
                 raise HTTPException(status_code=404, detail="Project not found")
             pins = db.query(PinRecord).filter(PinRecord.project_id == project_id).all()
-            return [_pin_response_from_record(pin) for pin in pins]
+            pin_responses = [_pin_response_from_record(pin) for pin in pins]
+            return sorted(pin_responses, key=_pin_response_order_key)
 
     if project_id not in projects:
         raise HTTPException(status_code=404, detail="Project not found")

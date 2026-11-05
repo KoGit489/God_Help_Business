@@ -1,3 +1,6 @@
+import json
+
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app, reset_demo_store
@@ -119,6 +122,50 @@ def test_database_workflows_preserve_capture_review_and_sharing(monkeypatch, tmp
             assert response.status_code == 201
             project_id = response.json()["id"]
             project_route = f"/projects/{project_id}"
+            plan_response = database_client.post(
+                f"{project_route}/floor-plan-upload", headers=headers,
+                files={"file": ("session-plan.png", image.getvalue(), "image/png")},
+            )
+            assert plan_response.status_code == 200
+            anchors = [
+                {"latitude": 0.0, "longitude": 0.0, "position_x": 0.0, "position_y": 0.0},
+                {"latitude": 0.0, "longitude": 0.001, "position_x": 1.0, "position_y": 0.0},
+                {"latitude": 0.001, "longitude": 0.0, "position_x": 0.0, "position_y": 1.0},
+            ]
+            session_response = database_client.post(
+                f"{project_route}/capture-sessions", headers=headers,
+                json={"floor_plan_key": plan_response.json()["media_key"], "calibration_anchors": anchors},
+            )
+            assert session_response.status_code == 201
+            capture_session_id = session_response.json()["id"]
+            session_route = f"{project_route}/capture-sessions/{capture_session_id}"
+            assert database_client.post(
+                session_route + "/observations", headers=headers,
+                json={"samples": [{
+                    "sequence": 1, "observed_at": "2026-11-05T10:00:00Z",
+                    "latitude": 0.00025, "longitude": 0.00025,
+                    "horizontal_accuracy_m": 0.8, "heading_deg": 90,
+                }]},
+            ).status_code == 200
+            frame_metadata = {
+                "sequence": 2, "captured_at": "2026-11-05T10:00:01Z",
+                "heading_deg": 90, "telemetry": {"frame_id": "sqlite-frame-1"},
+            }
+            assert database_client.post(
+                session_route + "/captures", headers=headers,
+                data={"metadata_json": json.dumps(frame_metadata)},
+                files={"file": ("session-frame.jpg", image.getvalue(), "image/jpeg")},
+            ).status_code == 201
+            finalized_session = database_client.post(session_route + "/finalize", headers=headers)
+            assert finalized_session.status_code == 200, finalized_session.json()
+            session_pins = finalized_session.json()["pins"]
+            assert len(session_pins) == 1
+            session_pin_id = session_pins[0]["id"]
+            assert session_pins[0]["position_x"] == pytest.approx(0.25, abs=1e-4)
+            assert session_pins[0]["position_y"] == pytest.approx(0.25, abs=1e-4)
+            assert session_pins[0]["telemetry"]["capture_session"]["sequence"] == 2
+            assert database_client.get(session_route, headers=headers).json()["status"] == "finalized"
+
             response = database_client.post(
                 f"{project_route}/pins",
                 headers=headers,
@@ -192,8 +239,9 @@ def test_database_workflows_preserve_capture_review_and_sharing(monkeypatch, tmp
             assert database_client.get("/health/ready").status_code == 200
             assert database_client.delete(pin_route, headers=headers).status_code == 200
             remaining_pins = database_client.get(f"{project_route}/pins", headers=headers).json()
-            assert [pin["id"] for pin in remaining_pins] == [slam_pin_id]
+            assert {pin["id"] for pin in remaining_pins} == {slam_pin_id, session_pin_id}
             assert database_client.delete(slam_pin_route, headers=headers).status_code == 200
+            assert database_client.delete(f"{project_route}/pins/{session_pin_id}", headers=headers).status_code == 200
             assert database_client.get(f"{project_route}/pins", headers=headers).json() == []
     finally:
         engine.dispose()
