@@ -902,3 +902,132 @@ def test_visual_odometry_estimates_motion_between_frames() -> None:
             frame.unlink(missing_ok=True)
 
 
+def test_spaces_storage_uploads_photo_and_floor_plan(monkeypatch) -> None:
+    from io import BytesIO
+    from types import SimpleNamespace
+    from importlib import import_module
+    main_module = import_module("app.main")
+
+    class FakeS3:
+        def __init__(self):
+            self.uploads = {}
+
+        def upload_fileobj(self, file_obj, bucket, key, ExtraArgs=None):
+            self.uploads[key] = {"body": file_obj.read(), "bucket": bucket, "args": ExtraArgs or {}}
+
+    fake_s3 = FakeS3()
+    monkeypatch.setattr(main_module, "STORAGE_BACKEND", "s3")
+    monkeypatch.setenv("S3_BUCKET", "test-space")
+    monkeypatch.setattr(main_module, "_s3_client", lambda: fake_s3)
+
+    photo = SimpleNamespace(filename="site.jpg", content_type="image/jpeg", file=BytesIO(b"photo-bytes"))
+    photo_key = main_module._store_photo("project-1", "pin-1", photo)
+    assert photo_key == "uploads/project-1/pin-1/site.jpg"
+    assert fake_s3.uploads[photo_key]["body"] == b"photo-bytes"
+    assert fake_s3.uploads[photo_key]["args"]["ContentType"] == "image/jpeg"
+
+    plan = SimpleNamespace(filename="plan.png", content_type="image/png", file=BytesIO(b"plan-bytes"))
+    plan_key = main_module._store_floor_plan("project-1", plan)
+    assert plan_key == "floorplans/project-1/plan.png"
+    assert fake_s3.uploads[plan_key]["body"] == b"plan-bytes"
+
+
+def test_spaces_media_route_streams_private_object_through_app(monkeypatch) -> None:
+    from io import BytesIO
+    from importlib import import_module
+    main_module = import_module("app.main")
+
+    class FakeS3:
+        def get_object(self, Bucket, Key):
+            assert Bucket == "test-space"
+            assert Key == "previews/project-1/pin-1/preview.jpg"
+            return {"Body": BytesIO(b"private-preview-bytes"), "ContentType": "image/jpeg", "ContentLength": 21}
+
+    monkeypatch.setattr(main_module, "STORAGE_BACKEND", "s3")
+    monkeypatch.setenv("S3_BUCKET", "test-space")
+    monkeypatch.setattr(main_module, "_s3_client", lambda: FakeS3())
+
+    response = client.get(
+        "/media/previews/project-1/pin-1/preview.jpg",
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/jpeg"
+    assert response.content == b"private-preview-bytes"
+
+
+def test_spaces_media_is_temporarily_downloaded_for_processing(monkeypatch) -> None:
+    from importlib import import_module
+
+    main_module = import_module("app.main")
+
+    class FakeS3:
+        def download_file(self, bucket, key, filename):
+            from pathlib import Path
+            Path(filename).write_bytes(b"temporary-native-content")
+
+    monkeypatch.setattr(main_module, "STORAGE_BACKEND", "s3")
+    monkeypatch.setenv("S3_BUCKET", "test-space")
+    monkeypatch.setattr(main_module, "_s3_client", lambda: FakeS3())
+
+    with main_module._materialized_media_path("uploads/p1/p2/native/capture.insv") as path:
+        assert path.exists()
+        assert path.read_bytes() == b"temporary-native-content"
+        temporary_path = path
+
+    assert not temporary_path.exists()
+
+
+def test_process_recovers_insp_misfiled_as_photo_and_creates_preview(monkeypatch, tmp_path) -> None:
+    from importlib import import_module
+
+    main_module = import_module("app.main")
+    monkeypatch.setattr(main_module, "PERSISTENCE_MODE", "memory")
+    monkeypatch.setattr(main_module, "STORAGE_BACKEND", "local")
+    monkeypatch.setattr(main_module, "UPLOAD_DIR", tmp_path)
+    monkeypatch.setattr(
+        main_module.capture_processor,
+        "extract_insp_preview",
+        lambda path: {"preview_available": True, "preview_data": b"preview", "preview_format": "jpeg"},
+    )
+    monkeypatch.setattr(main_module, "_store_preview", lambda project_id, pin_id, data: f"previews/{project_id}/{pin_id}/preview.jpg")
+    reset_demo_store()
+
+    project = client.post("/projects", json={"title": "Legacy Native Upload"}).json()
+    pin = client.post(
+        f"/projects/{project['id']}/pins",
+        json={"latitude": 0, "longitude": 0, "heading": 0, "position_x": 0.5, "position_y": 0.5, "captured_on": "2026-10-31", "media_type": "insta360"},
+    ).json()
+    photo_key = f"uploads/{project['id']}/{pin['id']}/capture.insp"
+    native_path = tmp_path / project["id"] / pin["id"] / "capture.insp"
+    native_path.parent.mkdir(parents=True, exist_ok=True)
+    native_path.write_bytes(b"not-an-image-preview")
+    main_module.pins_by_id[pin["id"]]["photo_key"] = photo_key
+
+    processed = client.post(f"/projects/{project['id']}/pins/{pin['id']}/process")
+    assert processed.status_code == 200
+    updated = client.get(f"/projects/{project['id']}/pins/{pin['id']}").json()
+    assert updated["photo_key"] is None
+    assert updated["native_file_key"] == photo_key
+    assert updated["preview_url"] == f"/media/previews/{project['id']}/{pin['id']}/preview.jpg"
+
+
+def test_preview_extractor_decodes_jpeg_encoded_insp_file() -> None:
+    from app.capture_processing import CaptureProcessor
+    from PIL import Image
+    import tempfile
+    from pathlib import Path
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".insp", delete=False)
+    tmp.close()
+    path = Path(tmp.name)
+    try:
+        Image.new("RGB", (320, 160), (80, 120, 160)).save(path, format="JPEG")
+        result = CaptureProcessor().extract_insp_preview(path)
+        assert result["preview_available"] is True
+        assert result["preview_width"] == 320
+        assert result["preview_height"] == 160
+        assert result["preview_data"].startswith(b"\xff\xd8")
+    finally:
+        path.unlink(missing_ok=True)
+
+

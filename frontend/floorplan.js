@@ -9,7 +9,7 @@ function buildApiBases() {
 }
 
 const apiBases = buildApiBases();
-const state = { project: null, plan: null, start: null, current: null, distance: 0, heading: 0, viewer: null, timer: null, calibrationPin: null, annotationMode: false, annotations: [], editingPin: null, viewerIndex: -1, navHistory: [], navRaf: null, viewerPin: null };
+const state = { project: null, plan: null, start: null, current: null, distance: 0, heading: 0, viewer: null, timer: null, calibrationPin: null, annotationMode: false, annotations: [], editingPin: null, viewerIndex: -1, navHistory: [], navRaf: null, viewerPin: null, previewGeneration: new Set() };
 const byId = (id) => document.getElementById(id);
 
 function setStatus(text) { byId('plan-status').textContent = text; }
@@ -166,8 +166,8 @@ function renderCalibrationList() {
   });
 }
 
-function setCurrent(x, y, isStart = false) {
-  state.current = { x: Math.max(0, Math.min(1, x)), y: Math.max(0, Math.min(1, y)), saved: false };
+function setCurrent(x, y, isStart = false, saved = false) {
+  state.current = { x: Math.max(0, Math.min(1, x)), y: Math.max(0, Math.min(1, y)), saved };
   if (isStart) state.start = { ...state.current };
   byId('walk-step').disabled = false; byId('save-waypoint').disabled = false;
   renderWaypoints();
@@ -228,10 +228,18 @@ async function uploadPlan(file) {
 async function saveWaypoint() {
   if (!state.project || !state.current) { setStatus('Choose a project and click the plan first.'); return; }
   const x = state.current.x; const y = state.current.y;
-  setStatus('Saving waypoint...');
+  let photo = byId('photo-file').files[0] || null;
+  let native = byId('native-file').files[0] || null;
+  if (photo && /\.(insp|insv)$/i.test(photo.name)) {
+    if (native) { setStatus('Choose the .insp/.insv file only in the Original Insta360 X6 file field.'); return; }
+    native = photo;
+    photo = null;
+    setStatus('Recognized the .insp/.insv capture; saving it as the original file and generating its preview...');
+  } else {
+    setStatus('Saving waypoint...');
+  }
   try {
     const pin = await apiRequest(`/projects/${state.project.id}/pins`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ latitude: Number((5.55 + y * 0.02).toFixed(6)), longitude: Number((-0.25 + x * 0.02).toFixed(6)), heading: state.heading, position_x: x, position_y: y, captured_on: new Date().toISOString().slice(0, 10), media_type: 'insta360' }) });
-    const photo = byId('photo-file').files[0]; const native = byId('native-file').files[0];
     if (photo) { const form = new FormData(); form.append('file', photo); await apiRequest(`/projects/${state.project.id}/pins/${pin.id}/upload`, { method: 'POST', body: form }); }
     let previewUrl = null;
     if (native) {
@@ -250,23 +258,66 @@ async function saveWaypoint() {
 function mediaUrl(key) { return key ? `/media/${key}` : null; }
 function viewerPins() { return (state.project?.pins || []).filter((p) => p.position_x != null && p.position_y != null); }
 
-function openCapture(pin, number) {
-  const pins = viewerPins();
+function isNativeCaptureKey(key) { return typeof key === 'string' && /\.(insp|insv)$/i.test(key.split('?')[0]); }
+
+async function generateCapturePreview(pin, number, initialYaw = null) {
+  if (state.previewGeneration.has(pin.id)) return;
+  state.previewGeneration.add(pin.id);
+  const container = byId('panorama');
+  container.replaceChildren();
+  const progress = document.createElement('div');
+  progress.style.cssText = 'color:white;padding:2rem 1rem;text-align:center';
+  progress.textContent = 'Preparing the 360 preview from the saved X6 file...';
+  container.appendChild(progress);
+  try {
+    const processed = await apiRequest(`/projects/${state.project.id}/pins/${pin.id}/process`, { method: 'POST' });
+    const refreshed = await apiRequest(`/projects/${state.project.id}/pins/${pin.id}`);
+    if (!refreshed.preview_url) {
+      throw new Error(processed.preview_error || 'No browser preview was produced. Export a JPG from the Insta360 app and replace the preview image.');
+    }
+    Object.assign(pin, refreshed);
+    openCapture(pin, number, initialYaw);
+  } catch (error) {
+    container.replaceChildren();
+    const failure = document.createElement('div');
+    failure.style.cssText = 'color:white;padding:2rem 1rem;text-align:center';
+    failure.textContent = `Preview generation failed: ${error.message}`;
+    container.appendChild(failure);
+  } finally {
+    state.previewGeneration.delete(pin.id);
+  }
+}
+
+function openCapture(pin, number, initialYaw = null) {
+  if (Number.isFinite(pin.position_x) && Number.isFinite(pin.position_y)) {
+    setCurrent(pin.position_x, pin.position_y, !state.start, true);
+  }
   const listIndex = state.project.pins.indexOf(pin);
   state.viewerIndex = listIndex;
   state.viewerPin = pin;
   trackNavHistory(pin);
   byId('viewer-title').textContent = `Capture #${number} · heading ${pin.heading || 0}°`;
   byId('viewer-modal').classList.add('open');
-  const imageUrl = mediaUrl(pin.photo_key || pin.thumbnail_key) || (pin.preview_url || null);
+  const previewKey = [pin.photo_key, pin.thumbnail_key].find((key) => key && !isNativeCaptureKey(key));
+  const imageUrl = mediaUrl(previewKey) || pin.preview_url || null;
   byId('plain-preview').style.display = 'none'; byId('panorama').style.display = 'block';
   if (state.viewer) { state.viewer.destroy(); state.viewer = null; }
   stopArrowLoop(); clearNavArrows();
   if (imageUrl && window.pannellum && pin.media_type === 'insta360') {
-    state.viewer = pannellum.viewer('panorama', { type: 'equirectangular', panorama: imageUrl, autoLoad: true, yaw: pin.heading || 0, hotSpots: buildNavHotspots(pin) });
+    const yaw = initialYaw ?? normalizeSignedAngle((Number(pin.heading) || 0) - panoramaReferenceHeading());
+    state.viewer = pannellum.viewer('panorama', { type: 'equirectangular', panorama: imageUrl, autoLoad: true, yaw, hotSpots: buildNavHotspots(pin) });
   }
   else if (imageUrl) { byId('panorama').style.display = 'none'; byId('plain-preview').src = imageUrl; byId('plain-preview').style.display = 'block'; updateNavArrows(pin); }
-  else { byId('panorama').innerHTML = '<div style="color:white;padding:4rem 1rem;text-align:center">No preview image yet. Upload a preview photo, or save the waypoint with its original .insp/.insv file and the app will generate one automatically.</div>'; }
+  else {
+    const rawCaptureKey = pin.native_file_key || [pin.photo_key, pin.thumbnail_key].find(isNativeCaptureKey);
+    const message = document.createElement('div');
+    message.style.cssText = 'color:white;padding:2rem 1rem;text-align:center';
+    message.textContent = rawCaptureKey
+      ? 'Preparing a browser preview from the original X6 capture...'
+      : 'No preview image is attached yet.';
+    byId('panorama').replaceChildren(message);
+    if (rawCaptureKey) generateCapturePreview(pin, number, initialYaw);
+  }
   updateNavButtons();
 }
 
@@ -276,6 +327,12 @@ function trackNavHistory(pin) {
   if (h[h.length - 1] !== pin.id) h.push(pin.id);
 }
 
+function navigateCapture(pin, back = false) {
+  if (back && state.navHistory.length < 2) state.navHistory.length = 0;
+  const initialYaw = state.viewer ? state.viewer.getYaw() : null;
+  openCapture(pin, state.project.pins.indexOf(pin) + 1, initialYaw);
+}
+
 function clearNavArrows() { document.querySelectorAll('.nav-arrow').forEach((el) => el.remove()); }
 
 function navTargets(pin) {
@@ -283,33 +340,42 @@ function navTargets(pin) {
   const targets = [];
   const idx = pins.indexOf(pin);
   const prevPin = idx > 0 ? pins[idx - 1] : null;
-  const backId = state.navHistory.length >= 2 ? state.navHistory[state.navHistory.length - 2] : null;
-  const backPin = (backId ? pins.find((p) => p.id === backId) : null) || prevPin;
-  if (backPin) targets.push({ pin: backPin, back: true });
+  if (prevPin) targets.push({ pin: prevPin, back: true });
   const nextPin = (idx >= 0 && idx < pins.length - 1) ? pins[idx + 1] : null;
-  if (nextPin && (!backPin || nextPin.id !== backPin.id)) targets.push({ pin: nextPin, back: false });
+  if (nextPin) targets.push({ pin: nextPin, back: false });
   return targets;
 }
+
+function panoramaReferenceHeading() { return Number(viewerPins()[0]?.heading) || 0; }
 
 function buildNavHotspots(pin) {
   return navTargets(pin).map(({ pin: target, back }) => {
     const bearing = bearingBetween(pin, target);
-    const yaw = ((bearing + 180) % 360 + 360) % 360 - 180;
+    const yaw = normalizeSignedAngle(bearing - panoramaReferenceHeading());
     return {
       yaw: yaw,
       pitch: -22,
       type: 'custom',
       cssClass: back ? 'nav-hotspot back' : 'nav-hotspot',
       createTooltipFunc: createFloorArrow,
-      createTooltipArgs: back,
-      clickHandlerFunc: () => openCapture(target, state.project.pins.indexOf(target) + 1),
+      createTooltipArgs: { back, number: state.project.pins.indexOf(target) + 1 },
+      clickHandlerFunc: () => navigateCapture(target, back),
     };
   });
 }
 
-function createFloorArrow(div) {
+function createFloorArrow(div, { back, number } = {}) {
   const arrow = document.createElement('span');
   arrow.className = 'floor-arrow';
+  div.setAttribute('role', 'button');
+  div.setAttribute('tabindex', '0');
+  div.setAttribute('aria-label', `${back ? 'Back' : 'Forward'} to capture #${number}`);
+  for (const eventName of ['mousedown', 'pointerdown', 'touchstart']) {
+    div.addEventListener(eventName, (event) => event.stopPropagation());
+  }
+  div.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); div.click(); }
+  });
   div.appendChild(arrow);
 }
 
@@ -318,6 +384,8 @@ function bearingBetween(fromPin, toPin) {
   return (Math.atan2(dx, -dy) * 180 / Math.PI + 360) % 360;
 }
 
+function normalizeSignedAngle(degrees) { return ((degrees + 180) % 360 + 360) % 360 - 180; }
+
 function currentViewYaw(pin) {
   if (state.viewer && typeof state.viewer.getYaw === 'function') return state.viewer.getYaw();
   return pin.heading || 0;
@@ -325,7 +393,8 @@ function currentViewYaw(pin) {
 
 function updateNavArrows(pin) {
   clearNavArrows();
-  const container = byId('panorama');
+  if (state.viewer) return;
+  const container = byId('capture-media');
   const viewYaw = currentViewYaw(pin);
   const halfFov = 90;
   navTargets(pin).forEach(({ pin: target, back }) => {
@@ -335,10 +404,10 @@ function updateNavArrows(pin) {
     if (Math.abs(signed) > halfFov) return;
     const arrow = document.createElement('button');
     arrow.type = 'button'; arrow.className = `nav-arrow${back ? ' back' : ''}`; arrow.title = back ? 'Back to previous capture' : `Go to capture (heading ${Math.round(bearing)}°)`;
-    arrow.innerHTML = '<span class="tip"></span>';
+    arrow.setAttribute('aria-label', arrow.title);
+    arrow.innerHTML = '<span class="floor-arrow"></span>';
     arrow.style.left = `${50 + (signed / halfFov) * 45}%`;
-    arrow.querySelector('.tip').style.transform = `rotate(${signed}deg)`;
-    arrow.addEventListener('click', (event) => { event.stopPropagation(); openCapture(target, state.project.pins.indexOf(target) + 1); });
+    arrow.addEventListener('click', (event) => { event.stopPropagation(); navigateCapture(target, back); });
     container.appendChild(arrow);
   });
 }
@@ -359,15 +428,19 @@ function stepViewer(direction) {
   const pins = viewerPins(); if (!pins.length) return;
   const currentPin = state.project.pins[state.viewerIndex];
   const idx = pins.indexOf(currentPin);
-  const nextIdx = (idx + direction + pins.length) % pins.length;
+  const nextIdx = idx + direction;
+  if (idx < 0 || nextIdx < 0 || nextIdx >= pins.length) return;
   const target = pins[nextIdx];
-  openCapture(target, state.project.pins.indexOf(target) + 1);
+  navigateCapture(target, direction < 0);
 }
 
 function updateNavButtons() {
   const has = viewerPins().length > 1;
   byId('prev-capture').style.display = has ? 'inline-flex' : 'none';
   byId('next-capture').style.display = has ? 'inline-flex' : 'none';
+  const targets = state.viewerPin ? navTargets(state.viewerPin) : [];
+  byId('prev-capture').disabled = !targets.some((target) => target.back);
+  byId('next-capture').disabled = !targets.some((target) => !target.back);
 }
 
 function handleViewerClick(event) {
@@ -385,7 +458,10 @@ async function loadProjects() {
 
 async function selectProject(projectId) {
   try {
-    state.project = await apiRequest(`/projects/${projectId}/review`); state.annotations = await apiRequest(`/projects/${projectId}/annotations`); state.start = null; state.current = null; state.calibrationPin = null; state.annotationMode = false; state.distance = 0; byId('route-distance').textContent = '0.0 ft';
+    state.project = await apiRequest(`/projects/${projectId}/review`); state.annotations = await apiRequest(`/projects/${projectId}/annotations`); state.plan = null; state.start = null; state.current = null; state.calibrationPin = null; state.annotationMode = false; state.distance = 0; byId('route-distance').textContent = '0.0 ft';
+    state.navHistory = []; state.editingPin = null;
+    byId('walk-step').disabled = true; byId('save-waypoint').disabled = true;
+    byId('edit-panel').style.display = 'none';
     const pinSelect = byId('annotation-pin'); pinSelect.innerHTML = '<option value="">General plan note</option>';
     state.project.pins.forEach((pin, index) => { const option = document.createElement('option'); option.value = pin.id; option.textContent = `Capture #${index + 1}`; pinSelect.appendChild(option); });
     renderPlan(); renderWaypoints(); setStatus(`${state.project.title} loaded. Upload a plan or choose a saved route.`);

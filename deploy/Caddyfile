@@ -1,0 +1,7 @@
+{$APP_DOMAIN} {
+	encode zstd gzip
+	basic_auth {
+		{$CLOUD_ACCESS_USER} {$CLOUD_ACCESS_PASSWORD_HASH}
+	}
+	reverse_proxy app:8000
+}
