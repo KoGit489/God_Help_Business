@@ -224,15 +224,22 @@ class CaptureProcessor:
 
         try:
             import cv2
-            capture = cv2.VideoCapture(str(file_path))
-            if not capture.isOpened():
-                raise RuntimeError("Could not open .insp/.insv file with cv2.VideoCapture")
-            
-            ret, frame = capture.read()
-            capture.release()
-            
-            if not ret or frame is None:
-                raise RuntimeError("Could not extract frame from .insp/.insv file")
+            frame = None
+            if file_path.suffix.lower() == ".insp":
+                import numpy as np
+                encoded_image = np.fromfile(str(file_path), dtype=np.uint8)
+                frame = cv2.imdecode(encoded_image, cv2.IMREAD_COLOR)
+
+            if frame is None:
+                capture = cv2.VideoCapture(str(file_path))
+                try:
+                    if not capture.isOpened():
+                        raise RuntimeError("Could not open .insp/.insv file with cv2.VideoCapture")
+                    ret, frame = capture.read()
+                    if not ret or frame is None:
+                        raise RuntimeError("Could not extract frame from .insp/.insv file")
+                finally:
+                    capture.release()
             
             height, width = frame.shape[:2]
             

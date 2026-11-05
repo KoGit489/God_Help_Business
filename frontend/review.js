@@ -145,7 +145,7 @@ async function createShareLink() {
     document.getElementById('share-box').style.display = 'block';
     document.getElementById('share-link-text').innerHTML = `<a href="${payload.share_link}" target="_blank">${payload.share_link}</a>`;
     document.getElementById('copy-share-link').style.display = 'inline-block';
-    renderOnboardingChecklist({ title: 'Project', pin_count: 0, pins: [] });
+    await renderProject(activeProjectId);
   } catch (error) {
     setReviewStatus(`Unable to create share link: ${error.message}`);
   }
