@@ -36,6 +36,8 @@ def test_project_detail_includes_pins() -> None:
 
 def test_upload_photo_for_pin(tmp_path) -> None:
     reset_demo_store()
+    import io
+    from PIL import Image
 
     created_project = client.post(
         "/projects",
@@ -54,7 +56,9 @@ def test_upload_photo_for_pin(tmp_path) -> None:
     ).json()
 
     sample_file = tmp_path / "sample.jpg"
-    sample_file.write_bytes(b"fake-image")
+    image = io.BytesIO()
+    Image.new("RGB", (1, 1), (20, 40, 60)).save(image, format="JPEG")
+    sample_file.write_bytes(image.getvalue())
 
     with sample_file.open("rb") as handle:
         response = client.post(

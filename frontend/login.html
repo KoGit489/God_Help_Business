@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CASAI Account</title>
+    <link rel="icon" href="assets/logo.png" type="image/png" />
+    <link rel="stylesheet" href="styles.css?v=4" />
+    <style>
+      .auth-shell { max-width: 520px; }
+      .auth-form { display: grid; gap: 0.8rem; }
+      .auth-form[hidden], .account-panel[hidden] { display: none; }
+      .auth-status { min-height: 1.5rem; color: var(--muted); }
+      .account-panel { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border); }
+      .admin-only { margin-top: 1.25rem; }
+    </style>
+  </head>
+  <body>
+    <main class="app-shell auth-shell">
+      <header class="site-header">
+        <div class="brand">
+          <img class="brand-logo" src="assets/logo.png" alt="CASAI logo" />
+          <div class="brand-text"><span class="eyebrow">CASAI / Draft 2</span><h1>Account access</h1></div>
+        </div>
+        <a href="index.html"><button class="quiet" type="button">Dashboard</button></a>
+      </header>
+      <section class="card stack">
+        <h2>Sign in</h2>
+        <form id="login-form" class="auth-form">
+          <label>Email<input id="login-email" type="email" autocomplete="username" required /></label>
+          <label>Password<input id="login-password" type="password" autocomplete="current-password" required /></label>
+          <button class="primary" type="submit">Sign in</button>
+        </form>
+        <div id="auth-status" class="auth-status" role="status" aria-live="polite"></div>
+        <section id="account-panel" class="account-panel" hidden>
+          <h2>Signed in</h2>
+          <p><strong id="account-name"></strong><br /><span id="account-email" class="muted"></span></p>
+          <button id="logout-button" class="secondary" type="button">Sign out</button>
+          <form id="create-user-form" class="auth-form admin-only" hidden>
+            <h2>Create account</h2>
+            <label>Name<input id="new-user-name" autocomplete="name" required maxlength="128" /></label>
+            <label>Email<input id="new-user-email" type="email" autocomplete="off" required maxlength="254" /></label>
+            <label>Temporary password<input id="new-user-password" type="password" autocomplete="new-password" minlength="12" required /></label>
+            <label><input id="new-user-admin" type="checkbox" /> Administrator</label>
+            <button class="primary" type="submit">Create account</button>
+          </form>
+        </section>
+      </section>
+    </main>
+    <script src="login.js?v=1"></script>
+  </body>
+</html>

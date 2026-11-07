@@ -42,6 +42,12 @@ const captureModePill = document.getElementById('capture-mode-pill');
 const nativeStatusPill = document.getElementById('native-status-pill');
 const useLocationButton = document.getElementById('use-location-btn');
 
+function redirectToLogin() {
+  if (window.location.pathname.endsWith('/login.html')) return;
+  const next = encodeURIComponent(`${window.location.pathname}${window.location.search}`);
+  window.location.assign(`/login.html?next=${next}`);
+}
+
 function setMessage(text) {
   message.textContent = text;
 }
@@ -111,7 +117,6 @@ function updateHeadingReadout(value) {
 
 function buildHeaders(options = {}) {
   const headers = new Headers(options.headers || {});
-  headers.set('x-user-id', 'demo');
   return headers;
 }
 
@@ -120,10 +125,15 @@ async function apiRequest(path, options = {}) {
 
   for (const base of apiBases) {
     try {
-      const response = await fetch(`${base}${path}`, { ...options, headers: buildHeaders(options) });
+      const response = await fetch(`${base}${path}`, { ...options, headers: buildHeaders(options), credentials: 'include' });
       const payload = await response.json().catch(() => null);
       if (response.ok) {
         return payload;
+      }
+
+      if (response.status === 401) {
+        redirectToLogin();
+        throw Object.assign(new Error('Sign-in is required.'), { authRequired: true });
       }
 
       const apiMessage = payload?.error?.message || `Request failed with status ${response.status}`;
@@ -133,6 +143,7 @@ async function apiRequest(path, options = {}) {
       }
       throw new Error(apiMessage);
     } catch (error) {
+      if (error.authRequired) throw error;
       lastError = error;
     }
   }
