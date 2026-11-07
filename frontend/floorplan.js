@@ -12,19 +12,29 @@ const apiBases = buildApiBases();
 const state = { project: null, plan: null, start: null, current: null, distance: 0, heading: 0, viewer: null, timer: null, calibrationPin: null, annotationMode: false, annotations: [], editingPin: null, viewerIndex: -1, navHistory: [], navRaf: null, viewerPin: null, previewGeneration: new Set() };
 const byId = (id) => document.getElementById(id);
 
+function redirectToLogin() {
+  if (window.location.pathname.endsWith('/login.html')) return;
+  const next = encodeURIComponent(`${window.location.pathname}${window.location.search}`);
+  window.location.assign(`/login.html?next=${next}`);
+}
+
 function setStatus(text) { byId('plan-status').textContent = text; }
-function headers(options = {}) { const result = new Headers(options.headers || {}); result.set('x-user-id', 'demo'); return result; }
+function headers(options = {}) { return new Headers(options.headers || {}); }
 
 async function apiRequest(path, options = {}) {
   let lastError = null;
   for (const base of apiBases) {
     try {
-      const response = await fetch(`${base}${path}`, { ...options, headers: headers(options) });
+      const response = await fetch(`${base}${path}`, { ...options, headers: headers(options), credentials: 'include' });
       const payload = await response.json().catch(() => null);
       if (response.ok) return payload;
+      if (response.status === 401) {
+        redirectToLogin();
+        throw Object.assign(new Error('Sign-in is required.'), { authRequired: true });
+      }
       if (response.status === 404 && base !== apiBases[apiBases.length - 1]) { lastError = new Error('Not found'); continue; }
       throw new Error(payload?.error?.message || `Request failed (${response.status})`);
-    } catch (error) { lastError = error; }
+    } catch (error) { if (error.authRequired) throw error; lastError = error; }
   }
   throw lastError || new Error('Unable to reach the API.');
 }

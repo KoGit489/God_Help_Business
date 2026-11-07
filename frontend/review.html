@@ -69,6 +69,7 @@
           </div>
         </div>
         <nav class="site-nav">
+          <a href="login.html"><button class="quiet" type="button">Account</button></a>
           <a href="floorplan.html"><button class="secondary" type="button">Floor plan walkthrough</button></a>
           <a href="index.html"><button class="quiet" type="button">Back to dashboard</button></a>
         </nav>
@@ -81,8 +82,16 @@
           <input id="review-title" placeholder="Project title" />
           <input id="review-description" placeholder="Description" style="margin-top:0.6rem;" />
           <button id="create-review-project" class="primary" style="margin-top:0.8rem;">Create project</button>
+          <label for="share-expiration" style="display:block; margin-top:0.8rem;">Share link expires in</label>
+          <select id="share-expiration" style="margin-top:0.3rem;">
+            <option value="1">1 day</option>
+            <option value="7" selected>7 days</option>
+            <option value="14">14 days</option>
+            <option value="30">30 days</option>
+          </select>
           <button id="create-share-link" class="secondary" style="margin-top:0.8rem;">Create share link</button>
           <button id="copy-share-link" class="secondary" style="margin-top:0.8rem; display:none;">Copy share link</button>
+          <button id="revoke-share-link" class="quiet" style="margin-top:0.8rem; display:none;">Revoke share link</button>
           <button id="mark-ready" class="quiet" style="margin-top:0.8rem;">Mark ready for review</button>
           <div class="panel" style="margin-top:1rem; padding: 0.8rem;">
             <div class="muted">Existing projects</div>
@@ -101,6 +110,7 @@
           <div id="share-box" class="share-box" style="display:none;">
             <div class="muted">Share this review</div>
             <div id="share-link-text" style="word-break: break-all;"></div>
+            <div id="share-expiry-text" class="muted" style="margin-top:0.5rem;"></div>
           </div>
         </div>
       </div>
@@ -109,6 +119,6 @@
         <ul id="review-pins"></ul>
       </div>
     </div>
-    <script src="review.js?v=3"></script>
+    <script src="review.js?v=4"></script>
   </body>
 </html>

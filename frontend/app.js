@@ -45,15 +45,26 @@ function setDashboardMessage(message) {
   document.querySelector('.card').appendChild(messageBox);
 }
 
+function redirectToLogin() {
+  if (window.location.pathname.endsWith('/login.html')) return;
+  const next = encodeURIComponent(`${window.location.pathname}${window.location.search}`);
+  window.location.assign(`/login.html?next=${next}`);
+}
+
 async function apiRequest(path, options = {}) {
   let lastError = null;
 
   for (const base of apiBases) {
     try {
-      const response = await fetch(`${base}${path}`, options);
+      const response = await fetch(`${base}${path}`, { ...options, credentials: 'include' });
       const payload = await response.json().catch(() => null);
       if (response.ok) {
         return payload;
+      }
+
+      if (response.status === 401) {
+        redirectToLogin();
+        throw Object.assign(new Error('Sign-in is required.'), { authRequired: true });
       }
 
       const message = payload?.error?.message || `Request failed with status ${response.status}`;
@@ -63,6 +74,7 @@ async function apiRequest(path, options = {}) {
       }
       throw new Error(message);
     } catch (error) {
+      if (error.authRequired) throw error;
       lastError = error;
     }
   }

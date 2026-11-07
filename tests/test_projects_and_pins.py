@@ -191,7 +191,7 @@ def test_manual_native_upload_supports_insv_extension_for_x6() -> None:
 
     upload_response = client.post(
         f"/projects/{project['id']}/pins/{pin['id']}/native-upload",
-        files={"file": ("capture.insv", b"fake-insta360-x6-video-file", "application/octet-stream")},
+        files={"file": ("capture.insv", b"\x00\x00\x00\x18ftypisom0000", "application/octet-stream")},
         headers={"X-User-Id": "user-alpha"},
     )
 
@@ -233,12 +233,23 @@ def test_browser_frontend_and_cors_are_available() -> None:
     preflight = client.options(
         "/projects",
         headers={
-            "Origin": "http://192.168.1.10:8000",
+            "Origin": "http://localhost:8000",
             "Access-Control-Request-Method": "GET",
         },
     )
     assert preflight.status_code == 200
-    assert preflight.headers.get("access-control-allow-origin") in {"*", "http://192.168.1.10:8000"}
+    assert preflight.headers.get("access-control-allow-origin") == "http://localhost:8000"
+    assert preflight.headers.get("access-control-allow-credentials") == "true"
+
+    denied_preflight = client.options(
+        "/projects",
+        headers={
+            "Origin": "http://192.168.1.10:8000",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+    assert denied_preflight.status_code == 400
+    assert denied_preflight.headers.get("access-control-allow-origin") is None
 
 
 def test_pdf_floor_plan_upload_is_rasterized_to_png() -> None:
@@ -268,17 +279,22 @@ def test_pdf_floor_plan_upload_is_rasterized_to_png() -> None:
 
 def test_floor_plan_upload_and_pin_position_are_available() -> None:
     reset_demo_store()
+    import io
+    from PIL import Image
 
     project = client.post("/projects", json={"title": "Plan Demo"}).json()
+    image = io.BytesIO()
+    Image.new("RGB", (1, 1), (60, 80, 100)).save(image, format="PNG")
+    png_data = image.getvalue()
     upload = client.post(
         f"/projects/{project['id']}/floor-plan-upload",
-        files={"file": ("plan.png", b"fake-plan", "image/png")},
+        files={"file": ("plan.png", png_data, "image/png")},
     )
     assert upload.status_code == 200
     assert upload.json()["media_url"].endswith(f"/media/floorplans/{project['id']}/plan.png")
     media_response = client.get(upload.json()["media_url"])
     assert media_response.status_code == 200
-    assert media_response.content == b"fake-plan"
+    assert media_response.content == png_data
 
     floorplan_page = client.get("/floorplan.html")
     assert floorplan_page.status_code == 200

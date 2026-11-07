@@ -2,28 +2,34 @@ from __future__ import annotations
 
 import logging
 import json
+import hashlib
 import os
+import re
+import secrets
 import shutil
 import tempfile
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from argon2 import PasswordHasher
+from argon2.exceptions import InvalidHashError, VerifyMismatchError
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi import Body, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, inspect, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.camera_adapter import Insta360CameraAdapter
 from app.capture_processing import CaptureProcessor
-from app.models import AnnotationRecord, Base, PinRecord, ProjectRecord, ShareLinkRecord
+from app.models import AnnotationRecord, AuthSessionRecord, Base, PinRecord, ProjectRecord, ShareLinkRecord, UserRecord
 
 load_dotenv()
 
@@ -42,6 +48,93 @@ STORAGE_BACKEND = os.getenv("STORAGE_BACKEND", "local").strip().lower()
 UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "uploaded_files"))
 PUBLIC_SHARE_BASE_URL = os.getenv("PUBLIC_SHARE_BASE_URL", "http://127.0.0.1:5500/frontend/share.html")
 SEED_DEMO_DATA = os.getenv("SEED_DEMO_DATA", "true").strip().lower() in {"1", "true", "yes"}
+AUTH_REQUIRED = os.getenv("AUTH_REQUIRED", "true").strip().lower() in {"1", "true", "yes"}
+ALLOW_ACCOUNT_REGISTRATION = os.getenv("ALLOW_ACCOUNT_REGISTRATION", "false").strip().lower() in {"1", "true", "yes"}
+SESSION_COOKIE_NAME = "casai_session"
+SESSION_TTL = timedelta(hours=int(os.getenv("SESSION_TTL_HOURS", "12")))
+SESSION_COOKIE_SECURE = os.getenv("SESSION_COOKIE_SECURE", "true").strip().lower() in {"1", "true", "yes"}
+MAX_IMAGE_UPLOAD_BYTES = int(os.getenv("MAX_IMAGE_UPLOAD_BYTES", str(25 * 1024 * 1024)))
+MAX_FLOOR_PLAN_UPLOAD_BYTES = int(os.getenv("MAX_FLOOR_PLAN_UPLOAD_BYTES", str(100 * 1024 * 1024)))
+MAX_NATIVE_UPLOAD_BYTES = int(os.getenv("MAX_NATIVE_UPLOAD_BYTES", str(2 * 1024 * 1024 * 1024)))
+MAX_REQUEST_BODY_BYTES = MAX_NATIVE_UPLOAD_BYTES + 1024 * 1024
+password_hasher = PasswordHasher()
+
+
+def _configured_cors_origins() -> list[str]:
+    origins = {origin.strip().rstrip("/") for origin in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",") if origin.strip()}
+    domain = os.getenv("APP_DOMAIN", "").strip().rstrip("/")
+    if domain:
+        origins.add(domain if domain.startswith(("http://", "https://")) else f"https://{domain}")
+    elif os.getenv("APP_ENV", "development").lower() != "production":
+        origins.update({
+            "http://localhost:5500", "http://127.0.0.1:5500",
+            "http://localhost:8000", "http://127.0.0.1:8000",
+        })
+    return sorted(origins)
+
+
+ALLOWED_CORS_ORIGINS = _configured_cors_origins()
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _as_utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
+
+def _migrate_legacy_share_links() -> None:
+    columns = {column["name"] for column in inspect(engine).get_columns("share_links")}
+    timestamp_type = "TIMESTAMP WITH TIME ZONE" if engine.dialect.name == "postgresql" else "DATETIME"
+    additions = {
+        "created_at": f"{timestamp_type}",
+        "expires_at": f"{timestamp_type}",
+        "revoked_at": f"{timestamp_type}",
+    }
+    now = _utc_now()
+    with engine.begin() as connection:
+        for column_name, column_type in additions.items():
+            if column_name not in columns:
+                connection.execute(text(f"ALTER TABLE share_links ADD COLUMN {column_name} {column_type}"))
+        connection.execute(text("UPDATE share_links SET created_at = :now WHERE created_at IS NULL"), {"now": now})
+        # Legacy tokens had no lifetime; expire them at migration time so they cannot remain permanent.
+        connection.execute(text("UPDATE share_links SET expires_at = :now WHERE expires_at IS NULL"), {"now": now})
+
+
+def _bootstrap_first_admin() -> None:
+    email = os.getenv("BOOTSTRAP_ADMIN_EMAIL", "").strip().lower()
+    password = os.getenv("BOOTSTRAP_ADMIN_PASSWORD", "")
+    name = os.getenv("BOOTSTRAP_ADMIN_NAME", "Administrator").strip() or "Administrator"
+    if PERSISTENCE_MODE == "database":
+        with SessionLocal() as db:
+            bootstrap_admin = db.scalar(select(UserRecord).where(UserRecord.email == email)) if email else None
+            if not db.query(UserRecord).count():
+                if not email or len(password) < 16:
+                    raise RuntimeError("Set BOOTSTRAP_ADMIN_EMAIL and a 16+ character BOOTSTRAP_ADMIN_PASSWORD before first startup.")
+                bootstrap_admin = UserRecord(
+                    id=str(uuid4()), email=_validate_account_email(email), name=name,
+                    password_hash=password_hasher.hash(password), is_admin=True, is_active=True,
+                )
+                db.add(bootstrap_admin)
+                db.flush()
+            if bootstrap_admin:
+                db.query(ProjectRecord).filter(ProjectRecord.owner_id.in_(["demo", "demo-user"])).update(
+                    {ProjectRecord.owner_id: bootstrap_admin.id}, synchronize_session=False
+                )
+            db.commit()
+        return
+
+    if not users_by_email:
+        if not email or len(password) < 16:
+            raise RuntimeError("Set BOOTSTRAP_ADMIN_EMAIL and a 16+ character BOOTSTRAP_ADMIN_PASSWORD before first startup.")
+        email = _validate_account_email(email)
+        user = {
+            "id": str(uuid4()), "email": email, "name": name,
+            "password_hash": password_hasher.hash(password), "is_admin": True, "is_active": True,
+        }
+        users_by_email[email] = user
+        users_by_id[user["id"]] = user
 
 
 @asynccontextmanager
@@ -49,9 +142,12 @@ async def lifespan(_: FastAPI):
     if PERSISTENCE_MODE == "database":
         try:
             Base.metadata.create_all(bind=engine)
+            _migrate_legacy_share_links()
         except SQLAlchemyError as exc:
             logger.exception("Database startup failed")
             raise RuntimeError("Database initialization failed") from exc
+    if AUTH_REQUIRED:
+        _bootstrap_first_admin()
     _seed_demo_data()
     yield
 
@@ -65,7 +161,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -211,12 +307,30 @@ class ShareLinkResponse(BaseModel):
     project_id: str
     share_token: str
     share_link: str
+    expires_at: datetime
+
+
+class ShareLinkCreateRequest(BaseModel):
+    expires_in_days: int = Field(default=7, ge=1, le=30)
+
+
+class AuthLoginRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+    password: str = Field(min_length=1, max_length=256)
+
+
+class AuthUserCreateRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+    name: str = Field(min_length=1, max_length=128)
+    password: str = Field(min_length=12, max_length=256)
+    is_admin: bool = False
 
 
 class AuthUserResponse(BaseModel):
     id: str
     email: str
     name: str
+    is_admin: bool = False
 
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
@@ -229,12 +343,37 @@ annotations_by_project: dict[str, list[dict[str, Any]]] = {}
 annotations_by_id: dict[str, dict[str, Any]] = {}
 project_share_tokens: dict[str, str] = {}
 share_token_to_project: dict[str, str] = {}
+share_links_by_project: dict[str, dict[str, Any]] = {}
+users_by_id: dict[str, dict[str, Any]] = {}
+users_by_email: dict[str, dict[str, Any]] = {}
+user_sessions_by_token_hash: dict[str, dict[str, Any]] = {}
 
 
 @app.middleware("http")
 async def attach_request_id(request: Request, call_next):
     request_id = request.headers.get("x-request-id", str(uuid4()))
     request.state.request_id = request_id
+    content_length = request.headers.get("content-length")
+    if content_length:
+        request_body_limit = MAX_REQUEST_BODY_BYTES
+        multipart_overhead = 1024 * 1024
+        if request.url.path.endswith("/floor-plan-upload"):
+            request_body_limit = MAX_FLOOR_PLAN_UPLOAD_BYTES + multipart_overhead
+        elif request.url.path.endswith("/native-upload"):
+            request_body_limit = MAX_NATIVE_UPLOAD_BYTES + multipart_overhead
+        elif request.url.path.endswith("/upload"):
+            request_body_limit = MAX_IMAGE_UPLOAD_BYTES + multipart_overhead
+        try:
+            if int(content_length) > request_body_limit:
+                return JSONResponse(status_code=413, content={"error": {"type": "request_too_large", "message": "Request body exceeds the configured upload limit.", "request_id": request_id}})
+        except ValueError:
+            return JSONResponse(status_code=400, content={"error": {"type": "invalid_content_length", "message": "Content-Length must be an integer.", "request_id": request_id}})
+    if request.method not in {"GET", "HEAD", "OPTIONS"}:
+        origin = request.headers.get("origin")
+        if origin and origin.rstrip("/") not in ALLOWED_CORS_ORIGINS:
+            return JSONResponse(status_code=403, content={"error": {"type": "origin_denied", "message": "Request origin is not allowed.", "request_id": request_id}})
+        if AUTH_REQUIRED and request.cookies.get(SESSION_COOKIE_NAME) and not origin:
+            return JSONResponse(status_code=403, content={"error": {"type": "csrf_check_failed", "message": "Authenticated state-changing requests must include an Origin header.", "request_id": request_id}})
     response = await call_next(request)
     response.headers["x-request-id"] = request_id
     return response
@@ -292,9 +431,15 @@ def reset_demo_store() -> None:
     annotations_by_id.clear()
     project_share_tokens.clear()
     share_token_to_project.clear()
+    share_links_by_project.clear()
+    users_by_id.clear()
+    users_by_email.clear()
+    user_sessions_by_token_hash.clear()
 
     if PERSISTENCE_MODE == "database":
         with SessionLocal() as db:
+            db.query(AuthSessionRecord).delete()
+            db.query(UserRecord).delete()
             db.query(ShareLinkRecord).delete()
             db.query(AnnotationRecord).delete()
             db.query(PinRecord).delete()
@@ -353,6 +498,35 @@ def _materialized_media_path(media_key: str):
             temp_path.unlink(missing_ok=True)
 
     return materialize()
+
+
+def _validate_upload_file(upload: UploadFile, allowed_suffixes: set[str], max_bytes: int) -> None:
+    filename = Path(upload.filename or "").name
+    suffix = Path(filename).suffix.lower()
+    if not filename or suffix not in allowed_suffixes:
+        raise HTTPException(status_code=415, detail="This file type is not allowed for this upload.")
+    upload.file.seek(0, os.SEEK_END)
+    size = upload.file.tell()
+    upload.file.seek(0)
+    if size <= 0:
+        raise HTTPException(status_code=400, detail="Uploaded files cannot be empty.")
+    if size > max_bytes:
+        raise HTTPException(status_code=413, detail=f"File exceeds the {max_bytes}-byte upload limit.")
+
+    prefix = upload.file.read(16)
+    upload.file.seek(0)
+    signatures = {
+        ".jpg": prefix.startswith(b"\xff\xd8\xff"),
+        ".jpeg": prefix.startswith(b"\xff\xd8\xff"),
+        ".png": prefix.startswith(b"\x89PNG\r\n\x1a\n"),
+        ".webp": len(prefix) >= 12 and prefix[:4] == b"RIFF" and prefix[8:12] == b"WEBP",
+        ".pdf": prefix.startswith(b"%PDF-"),
+        ".zip": prefix.startswith((b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")),
+        ".mp4": len(prefix) >= 8 and prefix[4:8] == b"ftyp",
+        ".insv": len(prefix) >= 8 and prefix[4:8] == b"ftyp",
+    }
+    if suffix in signatures and not signatures[suffix]:
+        raise HTTPException(status_code=415, detail="The file contents do not match the filename type.")
 
 
 def _store_photo(project_id: str, pin_id: str, upload: UploadFile) -> str:
@@ -569,12 +743,98 @@ def _build_project_detail(project_id: str) -> ProjectDetailResponse:
 
 
 def _get_user_id(request: Request) -> str:
-    user_id = request.headers.get("x-user-id")
-    return user_id or "demo"
+    if not AUTH_REQUIRED:
+        return request.headers.get("x-user-id") or "demo"
+    user = _authenticated_user(request)
+    return user["id"]
+
+
+def _session_token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _authenticated_user(request: Request) -> dict[str, Any]:
+    cached = getattr(request.state, "authenticated_user", None)
+    if cached:
+        return cached
+    token = request.cookies.get(SESSION_COOKIE_NAME)
+    if not token:
+        raise HTTPException(status_code=401, detail="Sign in is required.")
+    token_hash = _session_token_hash(token)
+    now = _utc_now()
+
+    if PERSISTENCE_MODE == "database":
+        with SessionLocal() as db:
+            session = db.get(AuthSessionRecord, token_hash)
+            if not session or session.revoked_at is not None or _as_utc(session.expires_at) <= now:
+                raise HTTPException(status_code=401, detail="Your session has expired. Sign in again.")
+            user = db.get(UserRecord, session.user_id)
+            if not user or not user.is_active:
+                raise HTTPException(status_code=401, detail="This account is unavailable.")
+            user_data = {"id": user.id, "email": user.email, "name": user.name, "is_admin": user.is_admin, "is_active": user.is_active}
+    else:
+        session = user_sessions_by_token_hash.get(token_hash)
+        if not session or session.get("revoked_at") is not None or _as_utc(session["expires_at"]) <= now:
+            raise HTTPException(status_code=401, detail="Your session has expired. Sign in again.")
+        user = users_by_id.get(session["user_id"])
+        if not user or not user.get("is_active", True):
+            raise HTTPException(status_code=401, detail="This account is unavailable.")
+        user_data = user
+    request.state.authenticated_user = user_data
+    return user_data
+
+
+def _set_login_session(response: Response, request: Request, user_id: str) -> None:
+    raw_token = secrets.token_urlsafe(32)
+    now = _utc_now()
+    expires_at = now + SESSION_TTL
+    token_hash = _session_token_hash(raw_token)
+    if PERSISTENCE_MODE == "database":
+        with SessionLocal() as db:
+            db.add(AuthSessionRecord(token_hash=token_hash, user_id=user_id, created_at=now, expires_at=expires_at))
+            db.commit()
+    else:
+        user_sessions_by_token_hash[token_hash] = {
+            "user_id": user_id, "created_at": now, "expires_at": expires_at, "revoked_at": None,
+        }
+    response.set_cookie(
+        SESSION_COOKIE_NAME,
+        raw_token,
+        max_age=int(SESSION_TTL.total_seconds()),
+        httponly=True,
+        secure=SESSION_COOKIE_SECURE or request.url.scheme == "https",
+        samesite="strict",
+        path="/",
+    )
+
+
+def _clear_login_session(response: Response) -> None:
+    response.delete_cookie(SESSION_COOKIE_NAME, path="/", httponly=True, secure=SESSION_COOKIE_SECURE, samesite="strict")
+
+
+def _validate_account_email(email: str) -> str:
+    normalized = email.strip().lower()
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", normalized):
+        raise HTTPException(status_code=422, detail="Enter a valid email address.")
+    return normalized
+
+
+def _get_user_by_email(email: str) -> dict[str, Any] | None:
+    if PERSISTENCE_MODE == "database":
+        with SessionLocal() as db:
+            user = db.scalar(select(UserRecord).where(UserRecord.email == email))
+            if not user:
+                return None
+            return {
+                "id": user.id, "email": user.email, "name": user.name,
+                "password_hash": user.password_hash, "is_admin": user.is_admin,
+                "is_active": user.is_active,
+            }
+    return users_by_email.get(email)
 
 
 def _ensure_project_ownership(project_id: str, user_id: str) -> None:
-    if user_id in {"demo", "demo-user"}:
+    if not AUTH_REQUIRED and user_id in {"demo", "demo-user"}:
         return
 
     if PERSISTENCE_MODE == "database":
@@ -603,8 +863,8 @@ def _ensure_project_access(project_id: str, share_token: str | None = None, user
             raise HTTPException(status_code=403, detail="Project does not belong to this user")
 
         if share_token is not None:
-            expected_token = project_share_tokens.get(project_id)
-            if not expected_token or expected_token != share_token:
+            link = share_links_by_project.get(project_id)
+            if not link or link["token"] != share_token or link["revoked_at"] is not None or _as_utc(link["expires_at"]) <= _utc_now():
                 raise HTTPException(status_code=403, detail="Invalid share token for this project")
         return _build_project_detail_memory(project_id)
 
@@ -618,7 +878,7 @@ def _ensure_project_access(project_id: str, share_token: str | None = None, user
 
         if share_token is not None:
             link = db.scalar(select(ShareLinkRecord).where(ShareLinkRecord.project_id == project_id))
-            if not link or link.token != share_token:
+            if not link or link.token != share_token or link.revoked_at is not None or _as_utc(link.expires_at) <= _utc_now():
                 raise HTTPException(status_code=403, detail="Invalid share token for this project")
 
         return _project_detail_from_record(db, project)
@@ -634,10 +894,16 @@ def _seed_demo_data() -> None:
             if existing:
                 return
 
+            demo_owner_id = "demo-user"
+            if AUTH_REQUIRED:
+                demo_owner_id = db.scalar(
+                    select(UserRecord.id).where(UserRecord.is_admin.is_(True)).order_by(UserRecord.created_at).limit(1)
+                ) or demo_owner_id
+
             project_id = str(uuid4())
             project = ProjectRecord(
                 id=project_id,
-                owner_id="demo-user",
+                owner_id=demo_owner_id,
                 title="North Ridge Inspection",
                 description="Demo project with evidence captured for a review-ready walkthrough.",
                 status="ready_for_review",
@@ -673,10 +939,16 @@ def _seed_demo_data() -> None:
     if projects:
         return
 
+    demo_owner_id = "demo-user"
+    if AUTH_REQUIRED:
+        demo_owner_id = next(
+            (user["id"] for user in users_by_id.values() if user.get("is_admin")),
+            demo_owner_id,
+        )
     demo_project_id = str(uuid4())
     demo_project = {
         "id": demo_project_id,
-        "owner_id": "demo-user",
+        "owner_id": demo_owner_id,
         "title": "North Ridge Inspection",
         "description": "Demo project with evidence captured for a review-ready walkthrough.",
         "status": "ready_for_review",
@@ -741,12 +1013,83 @@ def readiness_check() -> ReadinessResponse:
 
 @app.get("/auth/me", response_model=AuthUserResponse, tags=["auth"])
 def get_current_user(request: Request) -> AuthUserResponse:
-    user_id = _get_user_id(request)
-    return AuthUserResponse(
-        id="demo-user",
-        email="demo@God_Help_Business.local",
-        name="Demo Builder",
-    )
+    if not AUTH_REQUIRED:
+        return AuthUserResponse(id="demo-user", email="demo@God_Help_Business.local", name="Demo Builder", is_admin=True)
+    user = _authenticated_user(request)
+    return AuthUserResponse(id=user["id"], email=user["email"], name=user["name"], is_admin=user["is_admin"])
+
+
+@app.post("/auth/login", response_model=AuthUserResponse, tags=["auth"])
+def login(payload: AuthLoginRequest, request: Request, response: Response) -> AuthUserResponse:
+    email = _validate_account_email(payload.email)
+    user = _get_user_by_email(email)
+    password_hash = user.get("password_hash") if user else None
+    password_valid = False
+    if password_hash:
+        try:
+            password_valid = password_hasher.verify(password_hash, payload.password)
+        except (VerifyMismatchError, InvalidHashError):
+            password_valid = False
+    if not user or not user.get("is_active", True) or not password_valid:
+        raise HTTPException(status_code=401, detail="Email or password is incorrect.")
+    if password_hasher.check_needs_rehash(password_hash):
+        new_hash = password_hasher.hash(payload.password)
+        if PERSISTENCE_MODE == "database":
+            with SessionLocal() as db:
+                record = db.get(UserRecord, user["id"])
+                if record:
+                    record.password_hash = new_hash
+                    db.commit()
+        else:
+            user["password_hash"] = new_hash
+    _set_login_session(response, request, user["id"])
+    return AuthUserResponse(id=user["id"], email=user["email"], name=user["name"], is_admin=user["is_admin"])
+
+
+@app.post("/auth/logout", status_code=204, tags=["auth"])
+def logout(request: Request, response: Response) -> Response:
+    raw_token = request.cookies.get(SESSION_COOKIE_NAME)
+    if raw_token:
+        token_hash = _session_token_hash(raw_token)
+        if PERSISTENCE_MODE == "database":
+            with SessionLocal() as db:
+                session = db.get(AuthSessionRecord, token_hash)
+                if session and session.revoked_at is None:
+                    session.revoked_at = _utc_now()
+                    db.commit()
+        else:
+            session = user_sessions_by_token_hash.get(token_hash)
+            if session:
+                session["revoked_at"] = _utc_now()
+    _clear_login_session(response)
+    response.status_code = 204
+    return response
+
+
+@app.post("/auth/users", response_model=AuthUserResponse, status_code=201, tags=["auth"])
+def create_account(payload: AuthUserCreateRequest, request: Request) -> AuthUserResponse:
+    actor = _authenticated_user(request) if AUTH_REQUIRED else {"is_admin": True}
+    if not actor.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Administrator access is required to create accounts.")
+    email = _validate_account_email(payload.email)
+    existing = _get_user_by_email(email)
+    if existing:
+        raise HTTPException(status_code=409, detail="An account with this email already exists.")
+    user_data = {
+        "id": str(uuid4()), "email": email, "name": payload.name.strip(),
+        "password_hash": password_hasher.hash(payload.password),
+        "is_admin": payload.is_admin, "is_active": True,
+    }
+    if not user_data["name"]:
+        raise HTTPException(status_code=422, detail="Name cannot be blank.")
+    if PERSISTENCE_MODE == "database":
+        with SessionLocal() as db:
+            db.add(UserRecord(**user_data))
+            db.commit()
+    else:
+        users_by_email[email] = user_data
+        users_by_id[user_data["id"]] = user_data
+    return AuthUserResponse(id=user_data["id"], email=email, name=user_data["name"], is_admin=user_data["is_admin"])
 
 
 @app.get("/camera/insta360/status", response_model=CameraStatusResponse, tags=["camera"])
@@ -899,9 +1242,13 @@ def update_project_status(project_id: str, payload: ProjectStatusUpdateRequest, 
 
 
 @app.post("/projects/{project_id}/share-link", response_model=ShareLinkResponse, tags=["projects"])
-def create_share_link(project_id: str, request: Request) -> ShareLinkResponse:
+def create_share_link(
+    project_id: str, request: Request, payload: ShareLinkCreateRequest = Body(default=ShareLinkCreateRequest())
+) -> ShareLinkResponse:
     user_id = _get_user_id(request)
     _ensure_project_ownership(project_id, user_id)
+    now = _utc_now()
+    expires_at = now + timedelta(days=payload.expires_in_days)
     if PERSISTENCE_MODE == "database":
         with SessionLocal() as db:
             project = db.get(ProjectRecord, project_id)
@@ -910,30 +1257,64 @@ def create_share_link(project_id: str, request: Request) -> ShareLinkResponse:
 
             share_link = db.scalar(select(ShareLinkRecord).where(ShareLinkRecord.project_id == project_id))
             if not share_link:
-                share_link = ShareLinkRecord(token=str(uuid4()), project_id=project_id)
+                share_link = ShareLinkRecord(token=secrets.token_urlsafe(32), project_id=project_id)
                 db.add(share_link)
-                db.commit()
+            else:
+                share_link.token = secrets.token_urlsafe(32)
+            share_link.created_at = now
+            share_link.expires_at = expires_at
+            share_link.revoked_at = None
+            db.commit()
 
             return ShareLinkResponse(
                 project_id=project_id,
                 share_token=share_link.token,
                 share_link=_create_share_url(share_link.token),
+                expires_at=expires_at,
             )
 
     if project_id not in projects:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    share_token = project_share_tokens.get(project_id)
-    if not share_token:
-        share_token = str(uuid4())
-        project_share_tokens[project_id] = share_token
-        share_token_to_project[share_token] = project_id
+    previous_link = share_links_by_project.get(project_id)
+    if previous_link:
+        share_token_to_project.pop(previous_link["token"], None)
+    share_token = secrets.token_urlsafe(32)
+    project_share_tokens[project_id] = share_token
+    share_token_to_project[share_token] = project_id
+    share_links_by_project[project_id] = {
+        "token": share_token, "created_at": now, "expires_at": expires_at, "revoked_at": None,
+    }
 
     return ShareLinkResponse(
         project_id=project_id,
         share_token=share_token,
         share_link=_create_share_url(share_token),
+        expires_at=expires_at,
     )
+
+
+@app.delete("/projects/{project_id}/share-link", status_code=204, tags=["projects"])
+def revoke_share_link(project_id: str, request: Request) -> Response:
+    _ensure_project_ownership(project_id, _get_user_id(request))
+    now = _utc_now()
+    if PERSISTENCE_MODE == "database":
+        with SessionLocal() as db:
+            if not db.get(ProjectRecord, project_id):
+                raise HTTPException(status_code=404, detail="Project not found")
+            link = db.scalar(select(ShareLinkRecord).where(ShareLinkRecord.project_id == project_id))
+            if link and link.revoked_at is None:
+                link.revoked_at = now
+                db.commit()
+        return Response(status_code=204)
+
+    if project_id not in projects:
+        raise HTTPException(status_code=404, detail="Project not found")
+    link = share_links_by_project.get(project_id)
+    if link and link["revoked_at"] is None:
+        link["revoked_at"] = now
+        share_token_to_project.pop(link["token"], None)
+    return Response(status_code=204)
 
 
 @app.get("/share/{share_token}", response_model=ProjectDetailResponse, tags=["projects"])
@@ -941,7 +1322,7 @@ def open_shared_project(share_token: str) -> ProjectDetailResponse:
     if PERSISTENCE_MODE == "database":
         with SessionLocal() as db:
             link = db.get(ShareLinkRecord, share_token)
-            if not link:
+            if not link or link.revoked_at is not None or _as_utc(link.expires_at) <= _utc_now():
                 raise HTTPException(status_code=404, detail="Share link not found")
 
             project = db.get(ProjectRecord, link.project_id)
@@ -951,6 +1332,9 @@ def open_shared_project(share_token: str) -> ProjectDetailResponse:
 
     project_id = share_token_to_project.get(share_token)
     if not project_id:
+        raise HTTPException(status_code=404, detail="Share link not found")
+    link = share_links_by_project.get(project_id)
+    if not link or link["token"] != share_token or link["revoked_at"] is not None or _as_utc(link["expires_at"]) <= _utc_now():
         raise HTTPException(status_code=404, detail="Share link not found")
 
     return _build_project_detail_memory(project_id)
@@ -1217,6 +1601,7 @@ def update_pin(project_id: str, pin_id: str, request: Request, payload: dict[str
 def upload_pin_photo(project_id: str, pin_id: str, request: Request, file: UploadFile = File(...)) -> UploadResponse:
     if file.filename is None:
         raise HTTPException(status_code=400, detail="A filename is required")
+    _validate_upload_file(file, {".jpg", ".jpeg", ".png", ".webp"}, MAX_IMAGE_UPLOAD_BYTES)
 
     user_id = _get_user_id(request)
     _ensure_project_ownership(project_id, user_id)
@@ -1252,6 +1637,9 @@ def upload_pin_photo(project_id: str, pin_id: str, request: Request, file: Uploa
 def upload_pin_native_file(project_id: str, pin_id: str, request: Request, file: UploadFile = File(...)) -> NativeUploadResponse:
     if file.filename is None:
         raise HTTPException(status_code=400, detail="A filename is required")
+    _validate_upload_file(
+        file, {".insp", ".insv", ".mp4", ".zip", ".jpg", ".jpeg", ".png"}, MAX_NATIVE_UPLOAD_BYTES
+    )
 
     user_id = _get_user_id(request)
     _ensure_project_ownership(project_id, user_id)
@@ -1375,6 +1763,7 @@ def process_pin_capture(project_id: str, pin_id: str, request: Request) -> dict[
 def upload_floor_plan(project_id: str, request: Request, file: UploadFile = File(...)) -> FloorPlanUploadResponse:
     if file.filename is None:
         raise HTTPException(status_code=400, detail="A filename is required")
+    _validate_upload_file(file, {".pdf", ".jpg", ".jpeg", ".png"}, MAX_FLOOR_PLAN_UPLOAD_BYTES)
 
     _ensure_project_ownership(project_id, _get_user_id(request))
     if PERSISTENCE_MODE == "database":
@@ -1394,8 +1783,16 @@ def upload_floor_plan(project_id: str, request: Request, file: UploadFile = File
 
 
 @app.get("/media/{media_path:path}", tags=["media"])
-def serve_media(media_path: str):
+def serve_media(media_path: str, request: Request):
+    media_parts = media_path.split("/")
+    if len(media_parts) < 3 or media_parts[0] not in {"uploads", "floorplans", "previews"}:
+        raise HTTPException(status_code=404, detail="Media file not found")
+    media_namespace, project_id = media_parts[:2]
+    _ensure_project_ownership(project_id, _get_user_id(request))
+
     if STORAGE_BACKEND == "s3":
+        if not media_path.startswith(f"{media_namespace}/{project_id}/"):
+            raise HTTPException(status_code=404, detail="Media file not found")
         try:
             object_response = _s3_client().get_object(Bucket=os.environ["S3_BUCKET"], Key=media_path)
         except Exception as exc:
@@ -1424,9 +1821,14 @@ def serve_media(media_path: str):
     relative_path = media_path.removeprefix("uploads/")
     requested_path = (UPLOAD_DIR / relative_path).resolve()
     upload_root = UPLOAD_DIR.resolve()
-    if upload_root not in requested_path.parents or not requested_path.is_file():
+    project_root = (
+        UPLOAD_DIR / project_id
+        if media_namespace == "uploads"
+        else UPLOAD_DIR / media_namespace / project_id
+    ).resolve()
+    if upload_root not in requested_path.parents or project_root not in requested_path.parents or not requested_path.is_file():
         raise HTTPException(status_code=404, detail="Media file not found")
-    return FileResponse(requested_path)
+    return FileResponse(requested_path, headers={"Cache-Control": "private, max-age=300"})
 
 
 @app.get("/index.html")

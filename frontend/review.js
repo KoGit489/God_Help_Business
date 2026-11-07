@@ -26,6 +26,13 @@ function buildApiBases() {
 const apiBases = buildApiBases();
 let activeProjectId = null;
 let activeShareToken = null;
+let activeShareExpiresAt = null;
+
+function redirectToLogin() {
+  if (window.location.pathname.endsWith('/login.html')) return;
+  const next = encodeURIComponent(`${window.location.pathname}${window.location.search}`);
+  window.location.assign(`/login.html?next=${next}`);
+}
 
 function setReviewStatus(message) {
   const summary = document.getElementById('review-summary');
@@ -50,7 +57,6 @@ function renderOnboardingChecklist(project) {
 
 function buildHeaders(options = {}) {
   const headers = new Headers(options.headers || {});
-  headers.set('x-user-id', 'demo');
   return headers;
 }
 
@@ -59,10 +65,15 @@ async function apiRequest(path, options = {}) {
 
   for (const base of apiBases) {
     try {
-      const response = await fetch(`${base}${path}`, { ...options, headers: buildHeaders(options) });
+      const response = await fetch(`${base}${path}`, { ...options, headers: buildHeaders(options), credentials: 'include' });
       const payload = await response.json().catch(() => null);
       if (response.ok) {
         return payload;
+      }
+
+      if (response.status === 401) {
+        redirectToLogin();
+        throw Object.assign(new Error('Sign-in is required.'), { authRequired: true });
       }
 
       const apiMessage = payload?.error?.message || `Request failed with status ${response.status}`;
@@ -72,6 +83,7 @@ async function apiRequest(path, options = {}) {
       }
       throw new Error(apiMessage);
     } catch (error) {
+      if (error.authRequired) throw error;
       lastError = error;
     }
   }
@@ -100,6 +112,10 @@ async function loadProjectList() {
       item.querySelector('button').addEventListener('click', () => {
         activeProjectId = project.id;
         activeShareToken = null;
+        activeShareExpiresAt = null;
+        document.getElementById('share-box').style.display = 'none';
+        document.getElementById('copy-share-link').style.display = 'none';
+        document.getElementById('revoke-share-link').style.display = 'none';
         renderProject(project.id);
       });
       list.appendChild(item);
@@ -140,11 +156,26 @@ async function createShareLink() {
   }
 
   try {
-    const payload = await apiRequest(`/projects/${activeProjectId}/share-link`, { method: 'POST' });
+    const expiresInDays = Number(document.getElementById('share-expiration').value);
+    const payload = await apiRequest(`/projects/${activeProjectId}/share-link`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expires_in_days: expiresInDays }),
+    });
     activeShareToken = payload.share_token;
+    activeShareExpiresAt = payload.expires_at;
     document.getElementById('share-box').style.display = 'block';
-    document.getElementById('share-link-text').innerHTML = `<a href="${payload.share_link}" target="_blank">${payload.share_link}</a>`;
+    const linkText = document.getElementById('share-link-text');
+    linkText.innerHTML = '';
+    const link = document.createElement('a');
+    link.href = payload.share_link;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.textContent = payload.share_link;
+    linkText.appendChild(link);
+    document.getElementById('share-expiry-text').textContent = `Expires ${new Date(activeShareExpiresAt).toLocaleString()}`;
     document.getElementById('copy-share-link').style.display = 'inline-block';
+    document.getElementById('revoke-share-link').style.display = 'inline-block';
     await renderProject(activeProjectId);
   } catch (error) {
     setReviewStatus(`Unable to create share link: ${error.message}`);
@@ -163,6 +194,22 @@ async function copyShareLink() {
     setReviewStatus('Share link copied to the clipboard.');
   } catch (error) {
     setReviewStatus('Copy failed. You can still open the share link manually.');
+  }
+}
+
+async function revokeShareLink() {
+  if (!activeProjectId || !activeShareToken) return;
+
+  try {
+    await apiRequest(`/projects/${activeProjectId}/share-link`, { method: 'DELETE' });
+    activeShareToken = null;
+    activeShareExpiresAt = null;
+    document.getElementById('share-box').style.display = 'none';
+    document.getElementById('copy-share-link').style.display = 'none';
+    document.getElementById('revoke-share-link').style.display = 'none';
+    await renderProject(activeProjectId);
+  } catch (error) {
+    setReviewStatus(`Unable to revoke share link: ${error.message}`);
   }
 }
 
@@ -225,6 +272,7 @@ async function renderProject(projectId) {
 document.getElementById('create-review-project').addEventListener('click', createReviewProject);
 document.getElementById('create-share-link').addEventListener('click', createShareLink);
 document.getElementById('copy-share-link').addEventListener('click', copyShareLink);
+document.getElementById('revoke-share-link').addEventListener('click', revokeShareLink);
 document.getElementById('mark-ready').addEventListener('click', markReadyForReview);
 
 loadProjectList();
