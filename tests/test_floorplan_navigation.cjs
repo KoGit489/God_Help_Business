@@ -123,6 +123,25 @@ test('panorama floor hotspots retain heading-relative forward and back bearings'
   assert.equal(run('buildNavHotspots(state.project.pins[1])[1].yaw'), 0);
 });
 
+test('panorama transitions face the clicked white or yellow arrow', () => {
+  const { panoramas, run } = loadFloorplan({ panorama: true });
+  run("state.project = { pins: [{ id: 'one', position_x: 0.2, position_y: 0.5, heading: 0, photo_key: 'one.jpg', media_type: 'insta360' }, { id: 'two', position_x: 0.4, position_y: 0.5, heading: 0, photo_key: 'two.jpg', media_type: 'insta360' }] }; openCapture(state.project.pins[0], 1);");
+
+  const forward = panoramas[0].hotSpots[0];
+  assert.equal(forward.cssClass, 'nav-hotspot');
+  panoramas[0].yaw = -90;
+  forward.clickHandlerFunc();
+  assert.equal(run('state.viewerPin.id'), 'two');
+  assert.equal(panoramas[1].yaw, 90);
+
+  const backward = panoramas[1].hotSpots[0];
+  assert.equal(backward.cssClass, 'nav-hotspot back');
+  panoramas[1].yaw = 90;
+  backward.clickHandlerFunc();
+  assert.equal(run('state.viewerPin.id'), 'one');
+  assert.equal(panoramas[2].yaw, -90);
+});
+
 test('walking heading changes do not rotate panorama arrows away from capture one alignment', () => {
   const { panoramas, run } = loadFloorplan({ panorama: true });
   run("state.project = { pins: [{ id: 'one', position_x: 0.05753747768000021, position_y: 0.7572884547124815, heading: 0, photo_key: 'one.jpg', media_type: 'insta360' }, { id: 'two', position_x: 0.08757929725839059, position_y: 0.7572884547124815, heading: 90, photo_key: 'two.jpg', media_type: 'insta360' }, { id: 'three', position_x: 0.11757929725839059, position_y: 0.7572884547124815, heading: 90, photo_key: 'three.jpg', media_type: 'insta360' }] }; openCapture(state.project.pins[0], 1);");
