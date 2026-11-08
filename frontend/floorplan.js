@@ -339,7 +339,10 @@ function trackNavHistory(pin) {
 
 function navigateCapture(pin, back = false, clickedYaw = null) {
   if (back && state.navHistory.length < 2) state.navHistory.length = 0;
-  const initialYaw = Number.isFinite(clickedYaw) ? clickedYaw : state.viewer ? state.viewer.getYaw() : null;
+  const destinationHeadingOffset = (Number(pin.heading) || 0) - panoramaReferenceHeading();
+  const initialYaw = Number.isFinite(clickedYaw)
+    ? normalizeSignedAngle(clickedYaw - destinationHeadingOffset)
+    : state.viewer ? state.viewer.getYaw() : null;
   openCapture(pin, state.project.pins.indexOf(pin) + 1, initialYaw);
 }
 
