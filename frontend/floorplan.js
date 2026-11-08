@@ -337,9 +337,9 @@ function trackNavHistory(pin) {
   if (h[h.length - 1] !== pin.id) h.push(pin.id);
 }
 
-function navigateCapture(pin, back = false) {
+function navigateCapture(pin, back = false, clickedYaw = null) {
   if (back && state.navHistory.length < 2) state.navHistory.length = 0;
-  const initialYaw = state.viewer ? state.viewer.getYaw() : null;
+  const initialYaw = Number.isFinite(clickedYaw) ? clickedYaw : state.viewer ? state.viewer.getYaw() : null;
   openCapture(pin, state.project.pins.indexOf(pin) + 1, initialYaw);
 }
 
@@ -369,7 +369,7 @@ function buildNavHotspots(pin) {
       cssClass: back ? 'nav-hotspot back' : 'nav-hotspot',
       createTooltipFunc: createFloorArrow,
       createTooltipArgs: { back, number: state.project.pins.indexOf(target) + 1 },
-      clickHandlerFunc: () => navigateCapture(target, back),
+      clickHandlerFunc: () => navigateCapture(target, back, yaw),
     };
   });
 }
