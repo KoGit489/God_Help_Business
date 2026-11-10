@@ -293,3 +293,12 @@ test('ordinary photo arrivals center continuing yellow arrows too', () => {
   run("state.project = { pins: [{ id: 'one', position_x: 0.1, position_y: 0.5 }, { id: 'two', position_x: 0.4, position_y: 0.5 }, { id: 'three', position_x: 0.4, position_y: 0.2 }].map(pin => ({ ...pin, photo_key: pin.id + '.jpg' })) }; openCapture(state.project.pins[0], 1); navigateCapture(state.project.pins[1]);");
   assert.equal(element('capture-media').children.find(arrow => arrow.className === 'nav-arrow').style.left, '50%');
 });
+
+test('direct capture opens center yellow arrows at each waypoint and white at the endpoint', () => {
+  const { panoramas, run } = loadFloorplan({ panorama: true });
+  run("state.project = { pins: [{ id: 'one', position_x: 0.1, position_y: 0.5 }, { id: 'two', position_x: 0.4, position_y: 0.5 }, { id: 'three', position_x: 0.4, position_y: 0.2 }].map(pin => ({ ...pin, heading: 270, photo_key: pin.id + '.jpg', media_type: 'insta360' })) }; state.project.pins.forEach((pin,index) => openCapture(pin,index+1));");
+  panoramas.forEach((config) => {
+    const arrow = config.hotSpots.find((hotspot) => hotspot.cssClass === 'nav-hotspot') || config.hotSpots[0];
+    assert.equal(config.yaw, arrow.yaw);
+  });
+});

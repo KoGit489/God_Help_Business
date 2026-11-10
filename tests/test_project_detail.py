@@ -148,6 +148,15 @@ def test_database_workflows_preserve_capture_review_and_sharing(monkeypatch, tmp
             detail = reopened_client.get(project_route, headers=headers).json()
             assert detail["floor_plan"]["filename"] == "photo.jpg"
             assert reopened_client.get(detail["floor_plan"]["media_url"], headers=headers).status_code == 200
+        with engine.begin() as connection:
+            from sqlalchemy import text
+
+            connection.execute(text("UPDATE projects SET floor_plan_json = NULL"))
+        with TestClient(app) as legacy_client:
+            recovered = legacy_client.get(project_route, headers=headers).json()["floor_plan"]
+            assert recovered["filename"] == "photo.jpg"
+            with api.SessionLocal() as db:
+                assert db.get(api.ProjectRecord, project_id).floor_plan_json is not None
     finally:
         engine.dispose()
 
@@ -182,3 +191,49 @@ def test_existing_project_table_gets_floor_plan_column(monkeypatch, tmp_path) ->
             assert "floor_plan_json" in {column["name"] for column in inspect(engine).get_columns("projects")}
     finally:
         engine.dispose()
+
+
+def test_legacy_spaces_plan_is_recovered_once_from_project_scoped_pages(monkeypatch) -> None:
+    from datetime import datetime, timedelta, timezone
+    from unittest.mock import Mock
+
+    from app import main as api
+
+    reset_demo_store()
+    project_id = client.post("/projects", json={"title": "Legacy Spaces plan"}).json()["id"]
+    prefix = f"floorplans/{project_id}/"
+    now = datetime.now(timezone.utc)
+    storage = Mock()
+    paginator = storage.get_paginator.return_value
+    paginator.paginate.return_value = [
+        {"Contents": [{"Key": f"{prefix}older.pdf", "LastModified": now - timedelta(days=1), "Size": 10}]},
+        {"Contents": [
+            {"Key": f"{prefix}latest.png", "LastModified": now, "Size": 20},
+            {"Key": "floorplans/other/private.png", "LastModified": now + timedelta(days=1), "Size": 20},
+            {"Key": f"{prefix}unrelated.txt", "LastModified": now + timedelta(days=1), "Size": 20},
+        ]},
+    ]
+    monkeypatch.setattr(api, "STORAGE_BACKEND", "s3")
+    monkeypatch.setattr(api, "_s3_client", lambda: storage)
+    monkeypatch.setenv("S3_BUCKET", "test-private-bucket")
+    for _ in range(2):
+        detail = client.get(f"/projects/{project_id}").json()
+        assert detail["floor_plan"]["media_key"] == f"{prefix}latest.png"
+        assert detail["floor_plan"]["content_type"] == "image/png"
+    paginator.paginate.assert_called_once_with(Bucket="test-private-bucket", Prefix=prefix)
+
+
+def test_legacy_plan_storage_failure_does_not_hide_project(monkeypatch) -> None:
+    from app import main as api
+
+    reset_demo_store()
+    project_id = client.post("/projects", json={"title": "Still accessible"}).json()["id"]
+    monkeypatch.setattr(api, "STORAGE_BACKEND", "s3")
+
+    def unavailable_storage():
+        raise RuntimeError("Storage unavailable")
+
+    monkeypatch.setattr(api, "_s3_client", unavailable_storage)
+    response = client.get(f"/projects/{project_id}")
+    assert response.status_code == 200
+    assert response.json()["floor_plan"] is None

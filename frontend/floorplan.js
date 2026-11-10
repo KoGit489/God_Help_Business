@@ -307,7 +307,11 @@ function openCapture(pin, number, initialYaw = null) {
   const listIndex = state.project.pins.indexOf(pin);
   state.viewerIndex = listIndex;
   state.viewerPin = pin;
-  state.viewYaw = initialYaw ?? normalizeSignedAngle((Number(pin.heading) || 0) - panoramaReferenceHeading());
+  const targets = navTargets(pin);
+  const defaultTarget = targets.find((target) => !target.back) || targets[0];
+  state.viewYaw = initialYaw ?? (defaultTarget
+    ? normalizeSignedAngle(bearingBetween(pin, defaultTarget.pin) - panoramaReferenceHeading())
+    : normalizeSignedAngle((Number(pin.heading) || 0) - panoramaReferenceHeading()));
   trackNavHistory(pin);
   byId('viewer-title').textContent = `Capture #${number} · heading ${pin.heading || 0}°`;
   byId('viewer-modal').classList.add('open');

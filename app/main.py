@@ -708,6 +708,11 @@ def _project_response_from_record(db: Session, record: ProjectRecord) -> Project
 
 
 def _project_detail_from_record(db: Session, record: ProjectRecord) -> ProjectDetailResponse:
+    if not record.floor_plan_json:
+        recovered_plan = _recover_floor_plan(record.id)
+        if recovered_plan:
+            record.floor_plan_json = json.dumps(recovered_plan)
+            db.commit()
     pins = db.query(PinRecord).filter(PinRecord.project_id == record.id).all()
     pin_items = [_pin_response_from_record(pin) for pin in pins]
     return ProjectDetailResponse(
@@ -726,6 +731,8 @@ def _build_project_detail_memory(project_id: str) -> ProjectDetailResponse:
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
+    if not project.get("floor_plan"):
+        project["floor_plan"] = _recover_floor_plan(project_id)
     pin_items = [PinResponse(**pin) for pin in pins_by_project.get(project_id, [])]
     return ProjectDetailResponse(
         id=project["id"],
@@ -736,6 +743,44 @@ def _build_project_detail_memory(project_id: str) -> ProjectDetailResponse:
         pins=pin_items,
         floor_plan=project.get("floor_plan"),
     )
+
+
+def _recover_floor_plan(project_id: str) -> dict[str, Any] | None:
+    content_types = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".pdf": "application/pdf"}
+    prefix = f"floorplans/{project_id}/"
+    try:
+        if STORAGE_BACKEND == "s3":
+            pages = _s3_client().get_paginator("list_objects_v2").paginate(
+                Bucket=os.environ["S3_BUCKET"], Prefix=prefix,
+            )
+            candidates = (
+                item for page in pages for item in page.get("Contents", [])
+                if item["Key"].startswith(prefix)
+                and "/" not in item["Key"][len(prefix):]
+                and Path(item["Key"]).suffix.lower() in content_types
+                and item.get("Size", 0) > 0
+            )
+            newest = max(candidates, key=lambda item: item["LastModified"], default=None)
+            media_key = newest["Key"] if newest else None
+        else:
+            folder = UPLOAD_DIR / "floorplans" / project_id
+            files = (
+                path for path in folder.iterdir()
+                if path.is_file() and not path.is_symlink() and path.suffix.lower() in content_types
+            ) if folder.is_dir() else ()
+            newest_file = max(files, key=lambda path: path.stat().st_mtime_ns, default=None)
+            media_key = f"{prefix}{newest_file.name}" if newest_file else None
+        if not media_key:
+            return None
+        return FloorPlanUploadResponse(
+            filename=Path(media_key).name,
+            media_key=media_key,
+            media_url=f"/media/{media_key}",
+            content_type=content_types[Path(media_key).suffix.lower()],
+        ).model_dump()
+    except Exception:
+        logger.warning("Could not recover the saved floor plan for project %s", project_id, exc_info=True)
+        return None
 
 
 def _build_project_detail(project_id: str) -> ProjectDetailResponse:
