@@ -22,6 +22,7 @@ function loadFloorplan({ panorama = false } = {}) {
       click() { listeners.get('click')?.({ stopPropagation() {}, target: this }); },
       dispatchEvent(event) { listeners.get(event.type)?.(event); },
     };
+    node.style.setProperty = (name, value) => { node.style[name] = value; };
     created.push(node);
     return node;
   }
@@ -151,7 +152,7 @@ test('clicked arrow remains centered across the compass wraparound', () => {
   assert.equal(forward.yaw, -180);
   forward.clickHandlerFunc();
   assert.equal(panoramas[1].yaw, -180);
-  assert.equal(run("document.getElementById('photo-compass-arrow').style.transform"), 'rotate(-90deg)');
+  assert.equal(run("document.getElementById('photo-compass-dial').style.transform"), 'rotate(-90deg)');
 });
 
 test('arrival centers the matching route arrow on a bend in either direction', () => {
@@ -168,9 +169,21 @@ test('photo compass tracks north while the panorama view turns', () => {
   const { element, run } = loadFloorplan({ panorama: true });
   run("state.project = { pins: [{ id: 'one', position_x: 0.2, position_y: 0.5, heading: 30, photo_key: 'one.jpg', media_type: 'insta360' }] }; openCapture(state.project.pins[0], 1);");
   assert.equal(element('photo-compass').style.display, 'grid');
-  assert.equal(element('photo-compass-arrow').style.transform, 'rotate(-30deg)');
+  assert.equal(element('photo-compass-dial').style.transform, 'rotate(-30deg)');
   run("state.viewer.getYaw = () => 90; updatePhotoCompass();");
-  assert.equal(element('photo-compass-arrow').style.transform, 'rotate(-120deg)');
+  assert.equal(element('photo-compass-dial').style.transform, 'rotate(-120deg)');
+});
+
+test('compass dial puts every facing direction at the top and keeps labels upright', () => {
+  const { element, run } = loadFloorplan();
+  run("state.project = { pins: [{ id: 'one', heading: 30, position_x: 0.2, position_y: 0.5 }] }; state.viewerPin = state.project.pins[0];");
+  for (const [heading, label] of [[0, 'N'], [45, 'NE'], [90, 'E'], [135, 'SE'], [180, 'S'], [225, 'SW'], [270, 'W'], [315, 'NW']]) {
+    run(`state.viewYaw = ${heading} - 30; updatePhotoCompass();`);
+    const signedHeading = run(`normalizeSignedAngle(${heading})`);
+    assert.equal(element('photo-compass-dial').style.transform, `rotate(${-signedHeading}deg)`);
+    assert.equal(element('photo-compass-dial').style['--compass-heading'], `${signedHeading}deg`);
+    assert.equal(element('photo-compass')['aria-label'], `Compass, facing ${heading}° ${label}`);
+  }
 });
 
 test('waypoint readouts use dynamic bottom-left Cartesian map distances', () => {

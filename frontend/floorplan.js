@@ -437,10 +437,13 @@ function cartesianPlanCoordinates(pin) {
 
 function updatePhotoCompass() {
   const pin = state.viewerPin;
-  const arrow = byId('photo-compass-arrow');
-  if (!pin || !arrow) return;
+  const dial = byId('photo-compass-dial');
+  const compass = byId('photo-compass');
+  if (!pin || !dial || !compass) return;
   const worldHeading = normalizeSignedAngle(currentViewYaw(pin) + panoramaReferenceHeading());
-  arrow.style.transform = `rotate(${-worldHeading}deg)`;
+  dial.style.transform = `rotate(${-worldHeading}deg)`;
+  dial.style.setProperty('--compass-heading', `${worldHeading}deg`);
+  compass.setAttribute('aria-label', `Compass, facing ${headingLabel((worldHeading + 360) % 360)}`);
 }
 
 function updateNavArrows(pin) {
