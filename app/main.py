@@ -143,6 +143,10 @@ async def lifespan(_: FastAPI):
         try:
             Base.metadata.create_all(bind=engine)
             _migrate_legacy_share_links()
+            project_columns = {column["name"] for column in inspect(engine).get_columns("projects")}
+            if "floor_plan_json" not in project_columns:
+                with engine.begin() as connection:
+                    connection.execute(text("ALTER TABLE projects ADD COLUMN floor_plan_json TEXT"))
         except SQLAlchemyError as exc:
             logger.exception("Database startup failed")
             raise RuntimeError("Database initialization failed") from exc
@@ -273,6 +277,7 @@ class ProjectDetailResponse(BaseModel):
     pin_count: int
     status: str = "draft"
     pins: list[PinResponse]
+    floor_plan: dict[str, Any] | None = None
 
 
 class UploadResponse(BaseModel):
@@ -712,6 +717,7 @@ def _project_detail_from_record(db: Session, record: ProjectRecord) -> ProjectDe
         pin_count=len(pin_items),
         status=record.status,
         pins=pin_items,
+        floor_plan=json.loads(record.floor_plan_json) if record.floor_plan_json else None,
     )
 
 
@@ -728,6 +734,7 @@ def _build_project_detail_memory(project_id: str) -> ProjectDetailResponse:
         pin_count=len(pin_items),
         status=project.get("status", "draft"),
         pins=pin_items,
+        floor_plan=project.get("floor_plan"),
     )
 
 
@@ -1774,12 +1781,22 @@ def upload_floor_plan(project_id: str, request: Request, file: UploadFile = File
         raise HTTPException(status_code=404, detail="Project not found")
 
     media_key = _store_floor_plan(project_id, file)
-    return FloorPlanUploadResponse(
+    floor_plan = FloorPlanUploadResponse(
         filename=Path(media_key).name,
         media_key=media_key,
         media_url=f"/media/{media_key}",
         content_type="image/png" if media_key.endswith(".png") else file.content_type,
     )
+    if PERSISTENCE_MODE == "database":
+        with SessionLocal() as db:
+            project = db.get(ProjectRecord, project_id)
+            if not project:
+                raise HTTPException(status_code=404, detail="Project not found")
+            project.floor_plan_json = floor_plan.model_dump_json()
+            db.commit()
+    else:
+        projects[project_id]["floor_plan"] = floor_plan.model_dump()
+    return floor_plan
 
 
 @app.get("/media/{media_path:path}", tags=["media"])

@@ -26,7 +26,15 @@
       .waypoint.current { width: 8px; height: 8px; background: var(--ink); animation: pulse 1.5s infinite; }
       .waypoint::after { content: attr(data-label); position: absolute; left: 10px; top: 6px; white-space: nowrap; color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 0.2rem 0.35rem; font-size: 0.72rem; font-weight: 700; }
       @keyframes pulse { 50% { box-shadow: 0 0 0 4px rgba(20, 23, 26, 0.18); } }
-      .heading-ticks { display: flex; justify-content: space-between; font-size: 0.72rem; font-weight: 700; color: var(--muted); padding: 0 2px; }
+      .heading-ticks { position: relative; height: 1.5rem; margin: 0 8px; font-size: 0.72rem; font-weight: 700; color: var(--muted); }
+      .heading-ticks span { position: absolute; left: var(--tick); transform: translateX(-50%); white-space: nowrap; }
+      .heading-ticks span:first-child { transform: none; }
+      .heading-ticks span:last-child { transform: translateX(-100%); }
+      #heading { appearance: none; width: 100%; height: 16px; background: transparent; margin: 0; }
+      #heading::-webkit-slider-runnable-track { height: 6px; background: var(--border); border-radius: 3px; }
+      #heading::-moz-range-track { height: 6px; background: var(--border); border-radius: 3px; }
+      #heading::-webkit-slider-thumb { appearance: none; width: 16px; height: 16px; margin-top: -5px; background: var(--gold-dark); border: 0; border-radius: 50%; }
+      #heading::-moz-range-thumb { width: 16px; height: 16px; background: var(--gold-dark); border: 0; border-radius: 50%; }
       .heading-live { display: inline-block; margin-left: 0.5rem; padding: 0.15rem 0.5rem; border-radius: var(--radius-sm); background: var(--gold-tint); color: var(--gold-dark); font-weight: 700; font-size: 0.85rem; }
       .readout { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.45rem; }
       .readout div { background: var(--bg); border-radius: var(--radius-sm); padding: 0.55rem; text-align: center; font-size: 0.78rem; font-weight: 700; color: var(--gold-dark); }
@@ -101,8 +109,8 @@
             <p class="small">Click the drawing to set the starting point. Then use the walk controls to move across the plan.</p>
             <button id="set-gps" class="secondary" type="button">Use current GPS location</button>
             <button id="enable-sensors" class="quiet" type="button">Enable device heading</button>
-            <label>Heading <span id="heading-live" class="heading-live">0° N</span><input id="heading" type="range" min="0" max="359" value="0" /></label>
-            <div class="heading-ticks"><span>0° N</span><span>90° E</span><span>180° S</span><span>270° W</span></div>
+            <label>Heading <span id="heading-live" class="heading-live">0° N</span><input id="heading" type="range" min="0" max="360" value="0" /></label>
+            <div class="heading-ticks"><span style="--tick:0%">0° N</span><span style="--tick:25%">90° E</span><span style="--tick:50%">180° S</span><span style="--tick:75%">270° W</span><span style="--tick:100%">360° N</span></div>
             <label>Walk distance (feet)<input id="step-distance" type="number" min="0.1" step="0.1" value="1" /></label>
             <button id="walk-step" type="button" disabled>Walk one step</button>
             <div id="telemetry-status" class="small">GPS and device sensors are optional. The demo route uses calibrated dead reckoning when they are unavailable.</div>
@@ -145,6 +153,6 @@
       <div class="viewer-nav"><button id="prev-capture" class="secondary" type="button">◀ Previous capture</button><button id="next-capture" class="secondary" type="button">Next capture ▶</button></div></div>
     </div>
     <script src="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.js"></script>
-    <script src="floorplan.js?v=23"></script>
+    <script src="floorplan.js?v=24"></script>
   </body>
 </html>

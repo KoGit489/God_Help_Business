@@ -154,6 +154,16 @@ test('clicked arrow remains centered across the compass wraparound', () => {
   assert.equal(run("document.getElementById('photo-compass-arrow').style.transform"), 'rotate(-90deg)');
 });
 
+test('arrival centers the matching route arrow on a bend in either direction', () => {
+  const { panoramas, run } = loadFloorplan({ panorama: true });
+  run("state.project = { pins: [{ id: 'one', position_x: 0.2, position_y: 0.5 }, { id: 'two', position_x: 0.4, position_y: 0.5 }, { id: 'three', position_x: 0.4, position_y: 0.2 }, { id: 'four', position_x: 0.6, position_y: 0.2 }].map(pin => ({ ...pin, photo_key: pin.id + '.jpg', media_type: 'insta360' })) }; openCapture(state.project.pins[0], 1);");
+  panoramas[0].hotSpots[0].clickHandlerFunc();
+  assert.equal(panoramas[1].yaw, panoramas[1].hotSpots.find(arrow => arrow.cssClass === 'nav-hotspot').yaw);
+  run('openCapture(state.project.pins[3], 4)');
+  panoramas[2].hotSpots[0].clickHandlerFunc();
+  assert.equal(panoramas[3].yaw, panoramas[3].hotSpots.find(arrow => arrow.cssClass === 'nav-hotspot back').yaw);
+});
+
 test('photo compass tracks north while the panorama view turns', () => {
   const { element, run } = loadFloorplan({ panorama: true });
   run("state.project = { pins: [{ id: 'one', position_x: 0.2, position_y: 0.5, heading: 30, photo_key: 'one.jpg', media_type: 'insta360' }] }; openCapture(state.project.pins[0], 1);");
@@ -163,9 +173,14 @@ test('photo compass tracks north while the panorama view turns', () => {
   assert.equal(element('photo-compass-arrow').style.transform, 'rotate(-120deg)');
 });
 
-test('waypoint readouts use bottom-left Cartesian map percentages', () => {
-  const { run } = loadFloorplan();
-  assert.equal(run("cartesianPlanCoordinates({ position_x: 0.25, position_y: 0.8 })"), 'X 25%, Y 20%');
+test('waypoint readouts use dynamic bottom-left Cartesian map distances', () => {
+  const { run, element } = loadFloorplan();
+  element('plan-width').value = '200';
+  element('plan-image').naturalWidth = 1000;
+  element('plan-image').naturalHeight = 500;
+  assert.equal(run("cartesianPlanCoordinates({ position_x: 0.25, position_y: 0.8 })"), 'X 50.0 ft, Y 20.0 ft');
+  element('plan-width').value = '100';
+  assert.equal(run("cartesianPlanCoordinates({ position_x: 0.25, position_y: 0.8 })"), 'X 25.0 ft, Y 10.0 ft');
   assert.equal(run("cartesianPlanCoordinates({ position_x: null, position_y: null })"), 'Not placed');
 });
 
@@ -173,6 +188,7 @@ test('navigation arrows stay near the floor on panorama and regular previews', (
   const panorama = loadFloorplan({ panorama: true });
   panorama.run("state.project = { pins: [{ id: 'one', position_x: 0.2, position_y: 0.5, heading: 0, photo_key: 'one.jpg', media_type: 'insta360' }, { id: 'two', position_x: 0.4, position_y: 0.5, heading: 0, photo_key: 'two.jpg', media_type: 'insta360' }] }; openCapture(state.project.pins[0], 1);");
   assert.equal(panorama.panoramas[0].hotSpots[0].pitch, -42);
+  assert.equal(panorama.panoramas[0].pitch, -18);
 
   const regular = loadFloorplan();
   regular.run("state.project = { pins: [{ id: 'one', position_x: 0.2, position_y: 0.5, heading: 0, photo_key: 'one.jpg' }, { id: 'two', position_x: 0.4, position_y: 0.5, heading: 0, photo_key: 'two.jpg' }] }; openCapture(state.project.pins[0], 1);");
@@ -262,4 +278,18 @@ test('failed automatic preview generation shows an error and clears its pending 
   await new Promise(setImmediate);
   assert.equal(run('state.previewGeneration.size'), 0);
   assert.ok(element('panorama').children[0].textContent.includes('Audit preview failure'));
+});
+
+test('opening a project restores its saved floor plan', async () => {
+  const { run } = loadFloorplan();
+  run("renderPlan = () => {}; apiRequest = async url => url.endsWith('/annotations') ? [] : { id: 'saved', title: 'Saved', pins: [], floor_plan: { filename: 'plan.png', media_url: '/media/floorplans/saved/plan.png', content_type: 'image/png' } };");
+  await run("selectProject('saved')");
+  assert.equal(run('state.plan.filename'), 'plan.png');
+  assert.equal(run('state.plan.media_url'), '/media/floorplans/saved/plan.png');
+});
+
+test('ordinary photo arrivals center continuing yellow arrows too', () => {
+  const { run, element } = loadFloorplan();
+  run("state.project = { pins: [{ id: 'one', position_x: 0.1, position_y: 0.5 }, { id: 'two', position_x: 0.4, position_y: 0.5 }, { id: 'three', position_x: 0.4, position_y: 0.2 }].map(pin => ({ ...pin, photo_key: pin.id + '.jpg' })) }; openCapture(state.project.pins[0], 1); navigateCapture(state.project.pins[1]);");
+  assert.equal(element('capture-media').children.find(arrow => arrow.className === 'nav-arrow').style.left, '50%');
 });

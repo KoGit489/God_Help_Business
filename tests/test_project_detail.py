@@ -144,5 +144,41 @@ def test_database_workflows_preserve_capture_review_and_sharing(monkeypatch, tmp
             assert database_client.get("/health/ready").status_code == 200
             assert database_client.delete(pin_route, headers=headers).status_code == 200
             assert database_client.get(f"{project_route}/pins", headers=headers).json() == []
+        with TestClient(app) as reopened_client:
+            detail = reopened_client.get(project_route, headers=headers).json()
+            assert detail["floor_plan"]["filename"] == "photo.jpg"
+            assert reopened_client.get(detail["floor_plan"]["media_url"], headers=headers).status_code == 200
+    finally:
+        engine.dispose()
+
+
+def test_existing_project_table_gets_floor_plan_column(monkeypatch, tmp_path) -> None:
+    from sqlalchemy import create_engine, inspect, text
+    from sqlalchemy.orm import sessionmaker
+
+    from app import main as api
+
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'legacy.sqlite'}", connect_args={"check_same_thread": False},
+    )
+    with engine.begin() as connection:
+        connection.execute(text(
+            "CREATE TABLE projects (id VARCHAR(64) PRIMARY KEY, owner_id VARCHAR(128) NOT NULL, "
+            "title VARCHAR(255) NOT NULL, description VARCHAR(1000), status VARCHAR(64) NOT NULL)"
+        ))
+        connection.execute(text(
+            "INSERT INTO projects VALUES ('legacy', 'demo', 'Existing project', NULL, 'draft')"
+        ))
+    monkeypatch.setattr(api, "PERSISTENCE_MODE", "database")
+    monkeypatch.setattr(api, "engine", engine)
+    monkeypatch.setattr(api, "SessionLocal", sessionmaker(bind=engine))
+    monkeypatch.setattr(api, "SEED_DEMO_DATA", False)
+    try:
+        with TestClient(app) as migrated_client:
+            response = migrated_client.get("/projects/legacy")
+            assert response.status_code == 200
+            assert response.json()["title"] == "Existing project"
+            assert response.json()["floor_plan"] is None
+            assert "floor_plan_json" in {column["name"] for column in inspect(engine).get_columns("projects")}
     finally:
         engine.dispose()

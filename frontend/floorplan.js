@@ -71,6 +71,7 @@ function renderPlan() {
   }
   wrap.innerHTML = '<div class="plan-stage"><img id="plan-image" alt="Uploaded floor plan" /><div id="waypoint-layer"></div></div>';
   byId('plan-image').src = state.plan.media_url;
+  byId('plan-image').addEventListener('load', renderWaypoints);
   renderWaypoints();
 }
 
@@ -221,7 +222,7 @@ function stepRoute() {
   const planWidth = Math.max(1, Number(byId('plan-width').value) || 120);
   const radians = state.heading * Math.PI / 180;
   const delta = feet / planWidth;
-  setCurrent(state.current.x + Math.sin(radians) * delta, state.current.y - Math.cos(radians) * delta);
+  setCurrent(state.current.x + Math.sin(radians) * delta, state.current.y - Math.cos(radians) * feet / planDimensions().height);
   state.distance += feet;
   byId('route-distance').textContent = `${state.distance.toFixed(1)} ft`;
   const scale = Number(byId('scale-select').value) || 0.125;
@@ -306,6 +307,7 @@ function openCapture(pin, number, initialYaw = null) {
   const listIndex = state.project.pins.indexOf(pin);
   state.viewerIndex = listIndex;
   state.viewerPin = pin;
+  state.viewYaw = initialYaw ?? normalizeSignedAngle((Number(pin.heading) || 0) - panoramaReferenceHeading());
   trackNavHistory(pin);
   byId('viewer-title').textContent = `Capture #${number} · heading ${pin.heading || 0}°`;
   byId('viewer-modal').classList.add('open');
@@ -315,8 +317,8 @@ function openCapture(pin, number, initialYaw = null) {
   if (state.viewer) { state.viewer.destroy(); state.viewer = null; }
   stopArrowLoop(); clearNavArrows();
   if (imageUrl && window.pannellum && pin.media_type === 'insta360') {
-    const yaw = initialYaw ?? normalizeSignedAngle((Number(pin.heading) || 0) - panoramaReferenceHeading());
-    state.viewer = pannellum.viewer('panorama', { type: 'equirectangular', panorama: imageUrl, autoLoad: true, yaw, hotSpots: buildNavHotspots(pin) });
+    const yaw = state.viewYaw;
+    state.viewer = pannellum.viewer('panorama', { type: 'equirectangular', panorama: imageUrl, autoLoad: true, yaw, pitch: -18, hotSpots: buildNavHotspots(pin) });
   }
   else if (imageUrl) { byId('panorama').style.display = 'none'; byId('plain-preview').src = imageUrl; byId('plain-preview').style.display = 'block'; updateNavArrows(pin); }
   else {
@@ -345,7 +347,10 @@ function trackNavHistory(pin) {
 
 function navigateCapture(pin, back = false, clickedYaw = null) {
   if (back && state.navHistory.length < 2) state.navHistory.length = 0;
-  const initialYaw = Number.isFinite(clickedYaw) ? clickedYaw : state.viewer ? state.viewer.getYaw() : null;
+  const continuation = navTargets(pin).find((target) => target.back === back);
+  const initialYaw = continuation
+    ? normalizeSignedAngle(bearingBetween(pin, continuation.pin) - panoramaReferenceHeading())
+    : state.viewer ? (Number.isFinite(clickedYaw) ? clickedYaw : state.viewer.getYaw()) : null;
   openCapture(pin, state.project.pins.indexOf(pin) + 1, initialYaw);
 }
 
@@ -396,7 +401,9 @@ function createFloorArrow(div, { back, number } = {}) {
 }
 
 function bearingBetween(fromPin, toPin) {
-  const dx = toPin.position_x - fromPin.position_x; const dy = toPin.position_y - fromPin.position_y;
+  const dimensions = planDimensions();
+  const dx = (toPin.position_x - fromPin.position_x) * dimensions.width;
+  const dy = (toPin.position_y - fromPin.position_y) * dimensions.height;
   return (Math.atan2(dx, -dy) * 180 / Math.PI + 360) % 360;
 }
 
@@ -404,7 +411,15 @@ function normalizeSignedAngle(degrees) { return ((degrees + 180) % 360 + 360) % 
 
 function currentViewYaw(pin) {
   if (state.viewer && typeof state.viewer.getYaw === 'function') return state.viewer.getYaw();
-  return normalizeSignedAngle((Number(pin.heading) || 0) - panoramaReferenceHeading());
+  return state.viewYaw ?? normalizeSignedAngle((Number(pin.heading) || 0) - panoramaReferenceHeading());
+}
+
+function planDimensions() {
+  const drawing = byId('plan-image') || byId('plan-canvas');
+  const width = Math.max(1, Number(byId('plan-width').value) || 120);
+  const imageWidth = drawing?.naturalWidth || drawing?.width || 1;
+  const imageHeight = drawing?.naturalHeight || drawing?.height || 1;
+  return { width, height: width * imageHeight / imageWidth };
 }
 
 function cartesianPlanCoordinates(pin) {
@@ -412,7 +427,8 @@ function cartesianPlanCoordinates(pin) {
   const x = Number(pin?.position_x);
   const y = Number(pin?.position_y);
   if (!Number.isFinite(x) || !Number.isFinite(y)) return 'Not placed';
-  return `X ${Math.round(x * 100)}%, Y ${Math.round((1 - y) * 100)}%`;
+  const dimensions = planDimensions();
+  return `X ${(x * dimensions.width).toFixed(1)} ft, Y ${((1 - y) * dimensions.height).toFixed(1)} ft`;
 }
 
 function updatePhotoCompass() {
@@ -439,7 +455,7 @@ function updateNavArrows(pin) {
     arrow.innerHTML = '<span class="floor-arrow"></span>';
     arrow.style.top = '82%';
     arrow.style.left = `${50 + (signed / halfFov) * 45}%`;
-    arrow.addEventListener('click', (event) => { event.stopPropagation(); navigateCapture(target, back); });
+    arrow.addEventListener('click', (event) => { event.stopPropagation(); navigateCapture(target, back, bearing); });
     container.appendChild(arrow);
   });
 }
@@ -491,7 +507,7 @@ async function loadProjects() {
 
 async function selectProject(projectId) {
   try {
-    state.project = await apiRequest(`/projects/${projectId}/review`); state.annotations = await apiRequest(`/projects/${projectId}/annotations`); state.plan = null; state.start = null; state.current = null; state.calibrationPin = null; state.annotationMode = false; state.distance = 0; byId('route-distance').textContent = '0.0 ft';
+    state.project = await apiRequest(`/projects/${projectId}/review`); state.annotations = await apiRequest(`/projects/${projectId}/annotations`); state.plan = state.project.floor_plan || null; state.start = null; state.current = null; state.calibrationPin = null; state.annotationMode = false; state.distance = 0; byId('route-distance').textContent = '0.0 ft';
     state.navHistory = []; state.editingPin = null;
     byId('walk-step').disabled = true; byId('save-waypoint').disabled = true;
     byId('edit-panel').style.display = 'none';
@@ -510,6 +526,7 @@ function enableSensors() {
 
 byId('project-select').addEventListener('change', (event) => selectProject(event.target.value));
 byId('floor-plan-file').addEventListener('change', (event) => uploadPlan(event.target.files[0]));
+byId('plan-width').addEventListener('input', () => { renderWaypointList(); renderCalibrationList(); });
 byId('plan-wrap').addEventListener('click', handlePlanClick);
 function headingLabel(degrees) {
   const cardinals = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
