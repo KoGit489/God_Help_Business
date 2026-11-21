@@ -1,6 +1,6 @@
 function buildApiBases() {
   const params = new URLSearchParams(window.location.search);
-  const override = params.get('apiBase');
+  const override = safeApiBase(params.get('apiBase'));
   if (override) return [override.replace(/\/$/, '')];
   if (window.location.protocol === 'file:' || ['localhost', '127.0.0.1'].includes(window.location.hostname)) return ['http://127.0.0.1:8000'];
   const sameOrigin = window.location.origin.replace(/\/$/, '');
@@ -34,8 +34,8 @@ async function apiRequest(path, options = {}) {
         throw Object.assign(new Error('Sign-in is required.'), { authRequired: true });
       }
       if (response.status === 404 && base !== apiBases[apiBases.length - 1]) { lastError = new Error('Not found'); continue; }
-      throw new Error(payload?.error?.message || `Request failed (${response.status})`);
-    } catch (error) { if (error.authRequired) throw error; lastError = error; }
+      throw Object.assign(new Error(payload?.error?.message || `Request failed (${response.status})`), { apiResponse: true });
+    } catch (error) { if (error.authRequired || error.apiResponse || !['GET', 'HEAD'].includes((options.method || 'GET').toUpperCase())) throw error; lastError = error; }
   }
   throw lastError || new Error('Unable to reach the API.');
 }
@@ -49,7 +49,7 @@ function renderPlan() {
     const tryRender = () => {
       if (!window.pdfjsLib) {
         if (Date.now() - start < 4000) { setTimeout(tryRender, 100); return; }
-        wrap.innerHTML = `<div class="plan-stage"><iframe title="Floor plan PDF" src="${state.plan.media_url}" style="width:100%;height:70vh;border:0;background:white;pointer-events:none;"></iframe><div id="plan-overlay"></div><div id="waypoint-layer"></div></div>`;
+        wrap.innerHTML = `<div class="plan-stage"><iframe title="Floor plan PDF" src="${escapeHtml(state.plan.media_url)}" style="width:100%;height:70vh;border:0;background:white;pointer-events:none;"></iframe><div id="plan-overlay"></div><div id="waypoint-layer"></div></div>`;
         renderWaypoints();
         setStatus('Fallback PDF viewer active. You can still click the plan to place waypoints.');
         return;
@@ -157,7 +157,7 @@ async function deleteWaypoint(pin, index) {
 function renderAnnotationList() {
   const list = byId('annotation-list'); if (!list) return;
   if (!state.annotations.length) { list.innerHTML = '<li class="small">No notes yet.</li>'; return; }
-  list.innerHTML = state.annotations.map((annotation, index) => `<li class="annotation-item"><strong>N${index + 1} · ${annotation.status.replace('_', ' ')}</strong><br /><span class="small">${annotation.body}</span></li>`).join('');
+  list.innerHTML = state.annotations.map((annotation, index) => `<li class="annotation-item"><strong>N${index + 1} · ${escapeHtml(annotation.status.replace('_', ' '))}</strong><br /><span class="small">${escapeHtml(annotation.body)}</span></li>`).join('');
 }
 
 function renderCalibrationList() {

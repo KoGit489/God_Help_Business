@@ -1,6 +1,6 @@
 function buildApiBases() {
   const params = new URLSearchParams(window.location.search);
-  const override = params.get('apiBase');
+  const override = safeApiBase(params.get('apiBase'));
   if (override) {
     return [override.replace(/\/$/, '')];
   }
@@ -37,7 +37,7 @@ function redirectToLogin() {
 function setReviewStatus(message) {
   const summary = document.getElementById('review-summary');
   if (!activeProjectId) {
-    summary.innerHTML = message;
+    summary.textContent = message;
   }
 }
 
@@ -81,9 +81,9 @@ async function apiRequest(path, options = {}) {
         lastError = new Error(apiMessage);
         continue;
       }
-      throw new Error(apiMessage);
+      throw Object.assign(new Error(apiMessage), { apiResponse: true });
     } catch (error) {
-      if (error.authRequired) throw error;
+      if (error.authRequired || error.apiResponse || !['GET', 'HEAD'].includes((options.method || 'GET').toUpperCase())) throw error;
       lastError = error;
     }
   }
@@ -108,7 +108,7 @@ async function loadProjectList() {
     projects.forEach((project) => {
       const item = document.createElement('div');
       item.className = 'project-pill';
-      item.innerHTML = `<span><strong>${project.title}</strong><br /><span class="muted">${project.pin_count} pins captured · ${project.status}</span></span><button type="button" style="padding: 0.45rem 0.7rem;">Open</button>`;
+      item.innerHTML = `<span><strong>${escapeHtml(project.title)}</strong><br /><span class="muted">${escapeHtml(project.pin_count)} pins captured · ${escapeHtml(project.status)}</span></span><button type="button" style="padding: 0.45rem 0.7rem;">Open</button>`;
       item.querySelector('button').addEventListener('click', () => {
         activeProjectId = project.id;
         activeShareToken = null;
@@ -121,7 +121,7 @@ async function loadProjectList() {
       list.appendChild(item);
     });
   } catch (error) {
-    list.innerHTML = `<div class="muted">Unable to load projects: ${error.message}</div>`;
+    list.innerHTML = `<div class="muted">Unable to load projects: ${escapeHtml(error.message)}</div>`;
   }
 }
 
@@ -240,7 +240,7 @@ async function renderProject(projectId) {
   try {
     const query = activeShareToken ? `?share_token=${encodeURIComponent(activeShareToken)}` : '';
     const project = await apiRequest(`/projects/${projectId}/review${query}`);
-    document.getElementById('review-summary').innerHTML = `<div class="status-pill">${project.status}</div><strong>${project.title}</strong><br />${project.description || 'No description'}<br /><span>${project.pin_count} pins captured</span>`;
+    document.getElementById('review-summary').innerHTML = `<div class="status-pill">${escapeHtml(project.status)}</div><strong>${escapeHtml(project.title)}</strong><br />${escapeHtml(project.description || 'No description')}<br /><span>${escapeHtml(project.pin_count)} pins captured</span>`;
     renderOnboardingChecklist(project);
 
     if (!project.pins.length) {
@@ -252,19 +252,19 @@ async function renderProject(projectId) {
       .map((pin) => `
         <li>
           <div class="pin-card">
-            <div class="mini-map" style="--heading:${pin.heading || 0}deg"></div>
+            <div class="mini-map" style="--heading:${Number.isFinite(Number(pin.heading)) ? Number(pin.heading) : 0}deg"></div>
             <div>
-              <strong>${pin.captured_on}</strong><br />
-              <span class="muted">Heading ${pin.heading || 0}° · ${pin.media_type || 'photo'}</span><br />
-              <span class="muted">${pin.latitude}, ${pin.longitude}</span><br />
-              <span class="muted">${pin.photo_key || pin.native_file_key || 'No media stored'}</span>
+              <strong>${escapeHtml(pin.captured_on)}</strong><br />
+              <span class="muted">Heading ${escapeHtml(pin.heading || 0)}° · ${escapeHtml(pin.media_type || 'photo')}</span><br />
+              <span class="muted">${escapeHtml(pin.latitude)}, ${escapeHtml(pin.longitude)}</span><br />
+              <span class="muted">${escapeHtml(pin.photo_key || pin.native_file_key || 'No media stored')}</span>
             </div>
           </div>
         </li>
       `)
       .join('');
   } catch (error) {
-    document.getElementById('review-summary').innerHTML = `Unable to load review: ${error.message}`;
+    document.getElementById('review-summary').textContent = `Unable to load review: ${error.message}`;
     pinList.innerHTML = '<li>Unable to load pins.</li>';
   }
 }
