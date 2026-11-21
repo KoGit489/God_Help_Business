@@ -18,6 +18,7 @@ class ProjectRecord(Base):
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     status: Mapped[str] = mapped_column(String(64), nullable=False, default="draft")
+    floor_plan_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     pins: Mapped[list[PinRecord]] = relationship(back_populates="project", cascade="all, delete-orphan")
     share_links: Mapped[list[ShareLinkRecord]] = relationship(back_populates="project", cascade="all, delete-orphan")

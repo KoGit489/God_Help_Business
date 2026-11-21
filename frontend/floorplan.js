@@ -10,6 +10,7 @@ function buildApiBases() {
 
 const apiBases = buildApiBases();
 const state = { project: null, plan: null, start: null, current: null, distance: 0, heading: 0, viewer: null, timer: null, calibrationPin: null, annotationMode: false, annotations: [], editingPin: null, viewerIndex: -1, navHistory: [], navRaf: null, viewerPin: null, previewGeneration: new Set() };
+const NAV_HOTSPOT_PITCH = -42;
 const byId = (id) => document.getElementById(id);
 
 function redirectToLogin() {
@@ -70,6 +71,7 @@ function renderPlan() {
   }
   wrap.innerHTML = '<div class="plan-stage"><img id="plan-image" alt="Uploaded floor plan" /><div id="waypoint-layer"></div></div>';
   byId('plan-image').src = state.plan.media_url;
+  byId('plan-image').addEventListener('load', renderWaypoints);
   renderWaypoints();
 }
 
@@ -82,7 +84,7 @@ function renderWaypoints() {
       const dot = document.createElement('button');
       dot.type = 'button'; dot.className = `waypoint ${pin.calibration_state === 'manually_verified' ? 'verified' : ''}`; dot.dataset.label = `#${index + 1}`;
       dot.style.left = `${pin.position_x * 100}%`; dot.style.top = `${pin.position_y * 100}%`;
-      dot.title = `Open capture ${index + 1}`;
+      dot.title = `Open capture ${index + 1} (${cartesianPlanCoordinates(pin)})`;
       dot.addEventListener('click', (event) => { event.stopPropagation(); event.preventDefault(); openCapture(pin, index + 1); });
       layer.appendChild(dot);
     });
@@ -110,7 +112,7 @@ function renderWaypointList() {
   pins.forEach((pin, index) => {
     const item = document.createElement('li');
     const hasMedia = Boolean(pin.photo_key || pin.preview_url || pin.native_file_key);
-    item.innerHTML = `<strong>#${index + 1}</strong> · ${Math.round((pin.position_x || 0) * 100)}%, ${Math.round((pin.position_y || 0) * 100)}% ${hasMedia ? '📷' : ''}`;
+    item.innerHTML = `<strong>#${index + 1}</strong> · ${cartesianPlanCoordinates(pin)} ${hasMedia ? '📷' : ''}`;
     const open = document.createElement('button'); open.type = 'button'; open.textContent = 'View';
     open.addEventListener('click', () => openCapture(pin, index + 1));
     const edit = document.createElement('button'); edit.type = 'button'; edit.textContent = 'Edit';
@@ -169,7 +171,7 @@ function renderCalibrationList() {
     const item = document.createElement('li'); item.className = 'calibration-item';
     const confidence = Math.round((pin.alignment_confidence || 0) * 100);
     const stateLabel = pin.calibration_state === 'manually_verified' ? 'Verified' : `Auto ${confidence}%`;
-    item.innerHTML = `<span><strong>Capture #${index}</strong><small>${stateLabel} · ${Math.round((pin.position_x || 0) * 100)}%, ${Math.round((pin.position_y || 0) * 100)}%</small></span>`;
+    item.innerHTML = `<span><strong>Capture #${index}</strong><small>${stateLabel} · ${cartesianPlanCoordinates(pin)}</small></span>`;
     const button = document.createElement('button'); button.type = 'button'; button.className = 'quiet'; button.textContent = 'Correct on plan';
     button.addEventListener('click', () => { state.calibrationPin = pin; setStatus(`Click the verified location for capture #${index}.`); });
     item.appendChild(button); list.appendChild(item);
@@ -220,7 +222,7 @@ function stepRoute() {
   const planWidth = Math.max(1, Number(byId('plan-width').value) || 120);
   const radians = state.heading * Math.PI / 180;
   const delta = feet / planWidth;
-  setCurrent(state.current.x + Math.sin(radians) * delta, state.current.y - Math.cos(radians) * delta);
+  setCurrent(state.current.x + Math.sin(radians) * delta, state.current.y - Math.cos(radians) * feet / planDimensions().height);
   state.distance += feet;
   byId('route-distance').textContent = `${state.distance.toFixed(1)} ft`;
   const scale = Number(byId('scale-select').value) || 0.125;
@@ -305,6 +307,11 @@ function openCapture(pin, number, initialYaw = null) {
   const listIndex = state.project.pins.indexOf(pin);
   state.viewerIndex = listIndex;
   state.viewerPin = pin;
+  const targets = navTargets(pin);
+  const defaultTarget = targets.find((target) => !target.back) || targets[0];
+  state.viewYaw = initialYaw ?? (defaultTarget
+    ? normalizeSignedAngle(bearingBetween(pin, defaultTarget.pin) - panoramaReferenceHeading())
+    : normalizeSignedAngle((Number(pin.heading) || 0) - panoramaReferenceHeading()));
   trackNavHistory(pin);
   byId('viewer-title').textContent = `Capture #${number} · heading ${pin.heading || 0}°`;
   byId('viewer-modal').classList.add('open');
@@ -314,8 +321,8 @@ function openCapture(pin, number, initialYaw = null) {
   if (state.viewer) { state.viewer.destroy(); state.viewer = null; }
   stopArrowLoop(); clearNavArrows();
   if (imageUrl && window.pannellum && pin.media_type === 'insta360') {
-    const yaw = initialYaw ?? normalizeSignedAngle((Number(pin.heading) || 0) - panoramaReferenceHeading());
-    state.viewer = pannellum.viewer('panorama', { type: 'equirectangular', panorama: imageUrl, autoLoad: true, yaw, hotSpots: buildNavHotspots(pin) });
+    const yaw = state.viewYaw;
+    state.viewer = pannellum.viewer('panorama', { type: 'equirectangular', panorama: imageUrl, autoLoad: true, yaw, pitch: -18, hotSpots: buildNavHotspots(pin) });
   }
   else if (imageUrl) { byId('panorama').style.display = 'none'; byId('plain-preview').src = imageUrl; byId('plain-preview').style.display = 'block'; updateNavArrows(pin); }
   else {
@@ -328,6 +335,11 @@ function openCapture(pin, number, initialYaw = null) {
     byId('panorama').replaceChildren(message);
     if (rawCaptureKey) generateCapturePreview(pin, number, initialYaw);
   }
+  byId('photo-compass').style.display = imageUrl ? 'grid' : 'none';
+  if (imageUrl) {
+    updatePhotoCompass();
+    if (state.viewer) startArrowLoop();
+  }
   updateNavButtons();
 }
 
@@ -339,10 +351,10 @@ function trackNavHistory(pin) {
 
 function navigateCapture(pin, back = false, clickedYaw = null) {
   if (back && state.navHistory.length < 2) state.navHistory.length = 0;
-  const destinationHeadingOffset = (Number(pin.heading) || 0) - panoramaReferenceHeading();
-  const initialYaw = Number.isFinite(clickedYaw)
-    ? normalizeSignedAngle(clickedYaw - destinationHeadingOffset)
-    : state.viewer ? state.viewer.getYaw() : null;
+  const continuation = navTargets(pin).find((target) => target.back === back);
+  const initialYaw = continuation
+    ? normalizeSignedAngle(bearingBetween(pin, continuation.pin) - panoramaReferenceHeading())
+    : state.viewer ? (Number.isFinite(clickedYaw) ? clickedYaw : state.viewer.getYaw()) : null;
   openCapture(pin, state.project.pins.indexOf(pin) + 1, initialYaw);
 }
 
@@ -367,7 +379,7 @@ function buildNavHotspots(pin) {
     const yaw = normalizeSignedAngle(bearing - panoramaReferenceHeading());
     return {
       yaw: yaw,
-      pitch: -22,
+      pitch: NAV_HOTSPOT_PITCH,
       type: 'custom',
       cssClass: back ? 'nav-hotspot back' : 'nav-hotspot',
       createTooltipFunc: createFloorArrow,
@@ -393,7 +405,9 @@ function createFloorArrow(div, { back, number } = {}) {
 }
 
 function bearingBetween(fromPin, toPin) {
-  const dx = toPin.position_x - fromPin.position_x; const dy = toPin.position_y - fromPin.position_y;
+  const dimensions = planDimensions();
+  const dx = (toPin.position_x - fromPin.position_x) * dimensions.width;
+  const dy = (toPin.position_y - fromPin.position_y) * dimensions.height;
   return (Math.atan2(dx, -dy) * 180 / Math.PI + 360) % 360;
 }
 
@@ -401,7 +415,35 @@ function normalizeSignedAngle(degrees) { return ((degrees + 180) % 360 + 360) % 
 
 function currentViewYaw(pin) {
   if (state.viewer && typeof state.viewer.getYaw === 'function') return state.viewer.getYaw();
-  return pin.heading || 0;
+  return state.viewYaw ?? normalizeSignedAngle((Number(pin.heading) || 0) - panoramaReferenceHeading());
+}
+
+function planDimensions() {
+  const drawing = byId('plan-image') || byId('plan-canvas');
+  const width = Math.max(1, Number(byId('plan-width').value) || 120);
+  const imageWidth = drawing?.naturalWidth || drawing?.width || 1;
+  const imageHeight = drawing?.naturalHeight || drawing?.height || 1;
+  return { width, height: width * imageHeight / imageWidth };
+}
+
+function cartesianPlanCoordinates(pin) {
+  if (pin?.position_x == null || pin.position_y == null) return 'Not placed';
+  const x = Number(pin?.position_x);
+  const y = Number(pin?.position_y);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return 'Not placed';
+  const dimensions = planDimensions();
+  return `X ${(x * dimensions.width).toFixed(1)} ft, Y ${((1 - y) * dimensions.height).toFixed(1)} ft`;
+}
+
+function updatePhotoCompass() {
+  const pin = state.viewerPin;
+  const dial = byId('photo-compass-dial');
+  const compass = byId('photo-compass');
+  if (!pin || !dial || !compass) return;
+  const worldHeading = normalizeSignedAngle(currentViewYaw(pin) + panoramaReferenceHeading());
+  dial.style.transform = `rotate(${-worldHeading}deg)`;
+  dial.style.setProperty('--compass-heading', `${worldHeading}deg`);
+  compass.setAttribute('aria-label', `Compass, facing ${headingLabel((worldHeading + 360) % 360)}`);
 }
 
 function updateNavArrows(pin) {
@@ -411,16 +453,16 @@ function updateNavArrows(pin) {
   const viewYaw = currentViewYaw(pin);
   const halfFov = 90;
   navTargets(pin).forEach(({ pin: target, back }) => {
-    const bearing = bearingBetween(pin, target);
-    const rel = ((bearing - viewYaw) % 360 + 360) % 360;
-    const signed = rel > 180 ? rel - 360 : rel;
+    const bearing = normalizeSignedAngle(bearingBetween(pin, target) - panoramaReferenceHeading());
+    const signed = normalizeSignedAngle(bearing - viewYaw);
     if (Math.abs(signed) > halfFov) return;
     const arrow = document.createElement('button');
     arrow.type = 'button'; arrow.className = `nav-arrow${back ? ' back' : ''}`; arrow.title = back ? 'Back to previous capture' : `Go to capture (heading ${Math.round(bearing)}°)`;
     arrow.setAttribute('aria-label', arrow.title);
     arrow.innerHTML = '<span class="floor-arrow"></span>';
+    arrow.style.top = '82%';
     arrow.style.left = `${50 + (signed / halfFov) * 45}%`;
-    arrow.addEventListener('click', (event) => { event.stopPropagation(); navigateCapture(target, back); });
+    arrow.addEventListener('click', (event) => { event.stopPropagation(); navigateCapture(target, back, bearing); });
     container.appendChild(arrow);
   });
 }
@@ -430,6 +472,7 @@ function startArrowLoop() {
   const tick = () => {
     if (!byId('viewer-modal').classList.contains('open') || !state.viewerPin) return;
     updateNavArrows(state.viewerPin);
+    updatePhotoCompass();
     state.navRaf = requestAnimationFrame(tick);
   };
   state.navRaf = requestAnimationFrame(tick);
@@ -471,7 +514,7 @@ async function loadProjects() {
 
 async function selectProject(projectId) {
   try {
-    state.project = await apiRequest(`/projects/${projectId}/review`); state.annotations = await apiRequest(`/projects/${projectId}/annotations`); state.plan = null; state.start = null; state.current = null; state.calibrationPin = null; state.annotationMode = false; state.distance = 0; byId('route-distance').textContent = '0.0 ft';
+    state.project = await apiRequest(`/projects/${projectId}/review`); state.annotations = await apiRequest(`/projects/${projectId}/annotations`); state.plan = state.project.floor_plan || null; state.start = null; state.current = null; state.calibrationPin = null; state.annotationMode = false; state.distance = 0; byId('route-distance').textContent = '0.0 ft';
     state.navHistory = []; state.editingPin = null;
     byId('walk-step').disabled = true; byId('save-waypoint').disabled = true;
     byId('edit-panel').style.display = 'none';
@@ -490,6 +533,7 @@ function enableSensors() {
 
 byId('project-select').addEventListener('change', (event) => selectProject(event.target.value));
 byId('floor-plan-file').addEventListener('change', (event) => uploadPlan(event.target.files[0]));
+byId('plan-width').addEventListener('input', () => { renderWaypointList(); renderCalibrationList(); });
 byId('plan-wrap').addEventListener('click', handlePlanClick);
 function headingLabel(degrees) {
   const cardinals = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
@@ -508,7 +552,7 @@ byId('update-mode').addEventListener('change', (event) => {
 });
 byId('enable-sensors').addEventListener('click', enableSensors);
 byId('set-gps').addEventListener('click', () => { if (!navigator.geolocation) { byId('telemetry-status').textContent = 'GPS is not available in this browser.'; return; } navigator.geolocation.getCurrentPosition(() => { byId('telemetry-status').textContent = 'GPS is available. Click the plan to calibrate its matching starting point.'; }, () => { byId('telemetry-status').textContent = 'GPS permission was unavailable; the calibrated demo route is still ready.'; }); });
-byId('close-viewer').addEventListener('click', () => { byId('viewer-modal').classList.remove('open'); stopArrowLoop(); clearNavArrows(); state.viewerPin = null; if (state.viewer) { state.viewer.destroy(); state.viewer = null; } });
+byId('close-viewer').addEventListener('click', () => { byId('viewer-modal').classList.remove('open'); byId('photo-compass').style.display = 'none'; stopArrowLoop(); clearNavArrows(); state.viewerPin = null; if (state.viewer) { state.viewer.destroy(); state.viewer = null; } });
 byId('prev-capture').addEventListener('click', () => stepViewer(-1));
 byId('next-capture').addEventListener('click', () => stepViewer(1));
 byId('panorama').addEventListener('click', handleViewerClick);
