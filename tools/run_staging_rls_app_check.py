@@ -29,6 +29,15 @@ def main() -> int:
         print("Staging database connection string must be PostgreSQL.")
         return 2
 
+    from sqlalchemy.engine import make_url
+
+    staging_url = make_url(database_url)
+    tls_query = dict(staging_url.query)
+    tls_query["sslmode"] = "verify-full"
+    tls_query["sslrootcert"] = "/tmp/casai-staging-ca.crt"
+    staging_url = staging_url.set(query=tls_query)
+    database_url = staging_url.render_as_string(hide_password=False)
+
     os.environ["APP_PERSISTENCE"] = "database"
     os.environ["DATABASE_URL"] = database_url
     os.environ["DATABASE_REQUIRE_RLS"] = "true"
