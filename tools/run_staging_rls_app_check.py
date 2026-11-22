@@ -23,6 +23,12 @@ def main() -> int:
         print("Staging database connection string is required.")
         return 2
 
+    if database_url.startswith("postgresql://"):
+        database_url = database_url.replace("postgresql://", "postgresql+psycopg://", 1)
+    elif not database_url.startswith("postgresql+psycopg://"):
+        print("Staging database connection string must be PostgreSQL.")
+        return 2
+
     os.environ["APP_PERSISTENCE"] = "database"
     os.environ["DATABASE_URL"] = database_url
     os.environ["DATABASE_REQUIRE_RLS"] = "true"
