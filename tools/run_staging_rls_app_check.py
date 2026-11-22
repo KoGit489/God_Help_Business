@@ -6,6 +6,13 @@ import secrets
 import sys
 import tempfile
 import uuid
+from pathlib import Path
+
+
+repository_root = Path(__file__).resolve().parent.parent
+for import_root in (repository_root, Path("/app")):
+    if import_root.is_dir() and str(import_root) not in sys.path:
+        sys.path.insert(0, str(import_root))
 
 
 def main() -> int:
