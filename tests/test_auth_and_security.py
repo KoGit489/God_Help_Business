@@ -11,6 +11,122 @@ client = TestClient(app)
 same_origin = {"Origin": "http://localhost:8000"}
 
 
+def test_static_frontend_does_not_expose_hidden_files(tmp_path) -> None:
+    from fastapi import FastAPI
+
+    (tmp_path / ".env.production").write_text("secret", encoding="utf-8")
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "config").write_text("secret", encoding="utf-8")
+    (tmp_path / "app.js").write_text("public", encoding="utf-8")
+    test_app = FastAPI()
+    test_app.mount("/", main.PublicFrontendFiles(directory=str(tmp_path)))
+    test_client = TestClient(test_app)
+    assert test_client.get("/.env.production").status_code == 404
+    assert test_client.get("/.git/config").status_code == 404
+    assert test_client.get("/app.js").text == "public"
+
+
+def test_database_errors_do_not_log_query_parameters() -> None:
+    from sqlalchemy import create_engine, text
+    from sqlalchemy.exc import SQLAlchemyError
+
+    engine = create_engine("sqlite://", hide_parameters=main.engine.hide_parameters)
+    with engine.connect() as connection, pytest.raises(SQLAlchemyError) as error:
+        connection.execute(text("SELECT * FROM missing_table WHERE secret = :secret"), {"secret": "sensitive-query-value"})
+    assert "sensitive-query-value" not in str(error.value)
+    assert "SQL parameters hidden" in str(error.value)
+
+
+def test_authenticated_account_checks_bind_rls_identity(monkeypatch) -> None:
+    reset_demo_store()
+    client.cookies.clear()
+    monkeypatch.setattr(main, "AUTH_REQUIRED", True)
+    monkeypatch.setattr(main, "SESSION_COOKIE_SECURE", False)
+    user = {
+        "id": "account-context", "email": "context@example.com", "name": "Account",
+        "password_hash": main.password_hasher.hash("a secure account context passphrase 2026"),
+        "is_admin": False, "is_active": True,
+    }
+    main.users_by_id[user["id"]] = user
+    main.users_by_email[user["email"]] = user
+    assert client.post("/auth/login", headers=same_origin, json={"email": user["email"], "password": "a secure account context passphrase 2026"}).status_code == 200
+    bound_users = []
+    monkeypatch.setattr(main, "set_user_id", bound_users.append)
+    assert client.get("/auth/me").status_code == 200
+    assert bound_users == [user["id"]]
+
+
+def test_authenticated_demo_named_user_cannot_review_another_owner_project(monkeypatch) -> None:
+    reset_demo_store()
+    client.cookies.clear()
+    monkeypatch.setattr(main, "AUTH_REQUIRED", True)
+    monkeypatch.setattr(main, "SESSION_COOKIE_SECURE", False)
+    user = {
+        "id": "demo", "email": "demo-user@example.com", "name": "Demo",
+        "password_hash": main.password_hasher.hash("a secure demo account passphrase 2026"),
+        "is_admin": False, "is_active": True,
+    }
+    main.users_by_id[user["id"]] = user
+    main.users_by_email[user["email"]] = user
+    main.projects["private-project"] = {"id": "private-project", "owner_id": "other-owner", "title": "Private"}
+    assert client.post("/auth/login", headers=same_origin, json={"email": user["email"], "password": "a secure demo account passphrase 2026"}).status_code == 200
+    assert client.get("/projects/private-project/review").status_code == 403
+
+
+@pytest.mark.parametrize("field,value", [
+    ("latitude", 91), ("longitude", -181), ("heading", "nan"),
+    ("captured_on", "x" * 65), ("photo_key", "x" * 501),
+    ("native_file_key", "x" * 501), ("thumbnail_key", "x" * 501),
+    ("media_type", "x" * 65),
+])
+def test_invalid_waypoint_input_is_rejected(field, value) -> None:
+    reset_demo_store()
+    project_id = client.post("/projects", json={"title": "Waypoint validation"}).json()["id"]
+    payload = {"latitude": 0, "longitude": 0, "heading": 0, "captured_on": "2026-01-01"}
+    payload[field] = value
+    assert client.post(f"/projects/{project_id}/pins", json=payload).status_code == 422
+
+
+@pytest.mark.parametrize("heading", ["not-a-number", "nan", "inf"])
+def test_invalid_waypoint_heading_update_is_rejected(heading) -> None:
+    reset_demo_store()
+    project_id = client.post("/projects", json={"title": "Waypoint update"}).json()["id"]
+    pin_id = client.post(f"/projects/{project_id}/pins", json={"latitude": 0, "longitude": 0, "heading": 10, "captured_on": "2026-01-01"}).json()["id"]
+    assert client.patch(f"/projects/{project_id}/pins/{pin_id}", json={"heading": heading}).status_code == 422
+    assert client.get(f"/projects/{project_id}/pins/{pin_id}").json()["heading"] == 10
+
+
+@pytest.mark.parametrize("path", ["/docs", "/docs/oauth2-redirect", "/redoc", "/openapi.json"])
+def test_production_does_not_expose_api_documentation(monkeypatch, path) -> None:
+    monkeypatch.setenv("APP_ENV", "production")
+    assert client.get(path).status_code == 404
+
+
+def test_sensitive_responses_are_not_cached_and_request_ids_are_bounded() -> None:
+    reset_demo_store()
+    response = client.get("/projects", headers={"X-Request-ID": "invalid request id"})
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "private, no-store"
+    assert response.headers["x-request-id"] != "invalid request id"
+    assert client.get("/auth/me").headers["cache-control"] == "private, no-store"
+
+
+@pytest.mark.parametrize("endpoint", ["http://storage.example.com", "https://user:password@storage.example.com", "https://storage.example.com/?credential=secret", "https://[invalid"])
+def test_production_storage_rejects_insecure_or_secret_bearing_endpoints(monkeypatch, endpoint) -> None:
+    from fastapi import HTTPException
+
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("S3_BUCKET", "private-bucket")
+    monkeypatch.setenv("S3_REGION", "test-region")
+    monkeypatch.setenv("S3_ENDPOINT_URL", endpoint)
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test-access")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test-secret")
+    with pytest.raises(HTTPException, match="HTTPS endpoint") as error:
+        main._s3_client()
+    assert "password" not in str(error.value.detail)
+    assert "secret" not in str(error.value.detail)
+
+
 def test_individual_login_ignores_spoofed_user_header_and_logout_revokes_session(monkeypatch) -> None:
     reset_demo_store()
     monkeypatch.setattr(main, "AUTH_REQUIRED", True)
@@ -236,6 +352,15 @@ def test_uploaded_media_is_private_to_the_project_owner(monkeypatch, tmp_path) -
         json={"email": other["email"], "password": "a secure media other passphrase 2026"},
     ).status_code == 200
     assert client.get(media_url).status_code == 403
+    project_url = f"/projects/{project['id']}"
+    pin_url = f"{project_url}/pins/{pin['id']}"
+    for path in (project_url, f"{project_url}/review", f"{project_url}/pins", pin_url, f"{project_url}/annotations"):
+        assert client.get(path).status_code == 403
+    assert client.patch(pin_url, headers=same_origin, json={"heading": 180}).status_code == 403
+    assert client.delete(pin_url, headers=same_origin).status_code == 403
+    assert client.post(f"{project_url}/share-link", headers=same_origin).status_code == 403
+    assert client.post(f"{project_url}/annotations", headers=same_origin, json={"body": "Unauthorized", "floor_plan_x": 0.5, "floor_plan_y": 0.5}).status_code == 403
+    assert main.pins_by_id[pin["id"]]["heading"] == 0
 
 
 def test_share_links_expire_and_can_be_revoked() -> None:

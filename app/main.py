@@ -270,21 +270,27 @@ class ProjectResponse(BaseModel):
 
 
 class ProjectStatusUpdateRequest(BaseModel):
-    status: str = Field(min_length=1)
+    status: str = Field(min_length=1, max_length=64)
 
 
 class PinCreateRequest(BaseModel):
-    latitude: float
-    longitude: float
+    model_config = ConfigDict(allow_inf_nan=False)
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
     heading: float
     position_x: float | None = Field(default=None, ge=0, le=1)
     position_y: float | None = Field(default=None, ge=0, le=1)
     telemetry: dict[str, Any] | None = None
-    captured_on: str
-    photo_key: str | None = None
-    media_type: str | None = None
-    native_file_key: str | None = None
-    thumbnail_key: str | None = None
+    captured_on: str = Field(min_length=1, max_length=64)
+    photo_key: str | None = Field(default=None, max_length=500)
+    media_type: str | None = Field(default=None, max_length=64)
+    native_file_key: str | None = Field(default=None, max_length=500)
+    thumbnail_key: str | None = Field(default=None, max_length=500)
+
+
+class PinUpdateRequest(BaseModel):
+    model_config = ConfigDict(allow_inf_nan=False)
+    heading: float | None = None
 
 
 class PinCalibrationRequest(BaseModel):
@@ -431,7 +437,7 @@ class AuthUserResponse(BaseModel):
     email_verified: bool = True
 
 
-engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+engine = create_engine(DATABASE_URL, pool_pre_ping=True, hide_parameters=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 projects: dict[str, dict[str, Any]] = {}
@@ -455,7 +461,11 @@ account_mutation_lock = RLock()
 @app.middleware("http")
 async def attach_request_id(request: Request, call_next):
     request_id = request.headers.get("x-request-id", str(uuid4()))
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", request_id):
+        request_id = str(uuid4())
     request.state.request_id = request_id
+    if os.getenv("APP_ENV", "development").strip().lower() == "production" and request.url.path in {"/docs", "/docs/", "/docs/oauth2-redirect", "/redoc", "/redoc/", "/openapi.json"}:
+        return JSONResponse(status_code=404, content={"error": {"type": "http_error", "message": "Not Found", "request_id": request_id}})
     content_length = request.headers.get("content-length")
     is_upload = request.method == "POST" and request.url.path.endswith(("/floor-plan-upload", "/native-upload", "/upload"))
     if request.method not in {"GET", "HEAD", "OPTIONS"} and (
@@ -493,6 +503,9 @@ async def attach_request_id(request: Request, call_next):
             return JSONResponse(status_code=exc.status_code, content={"error": {"type": "http_error", "message": exc.detail, "request_id": request_id}})
     response = await call_next(request)
     response.headers["x-request-id"] = request_id
+    if (request.url.path.startswith(("/auth/", "/projects", "/share/", "/media/", "/analytics/"))
+            and "no-store" not in response.headers.get("Cache-Control", "").lower()):
+        response.headers["Cache-Control"] = "private, no-store"
     return response
 
 
@@ -600,6 +613,13 @@ def _s3_client():
         raise HTTPException(status_code=500, detail="S3_BUCKET, S3_REGION, and S3_ENDPOINT_URL are required for S3 storage")
     if not os.getenv("AWS_ACCESS_KEY_ID") or not os.getenv("AWS_SECRET_ACCESS_KEY"):
         raise HTTPException(status_code=500, detail="Spaces access key credentials are not configured")
+    if os.getenv("APP_ENV", "development").strip().lower() == "production":
+        try:
+            endpoint = urlsplit(endpoint_url)
+            if endpoint.scheme != "https" or not endpoint.hostname or endpoint.username or endpoint.password or endpoint.query or endpoint.fragment:
+                raise ValueError("Invalid storage endpoint")
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail="Production storage requires a valid HTTPS endpoint without embedded credentials.") from exc
     return boto3.client("s3", region_name=region, endpoint_url=endpoint_url)
 
 
@@ -978,6 +998,7 @@ def _session_token_hash(token: str) -> str:
 def _authenticated_user(request: Request) -> dict[str, Any]:
     cached = getattr(request.state, "authenticated_user", None)
     if cached:
+        set_user_id(cached["id"])
         return cached
     token = request.cookies.get(SESSION_COOKIE_NAME)
     if not token:
@@ -1007,6 +1028,7 @@ def _authenticated_user(request: Request) -> dict[str, Any]:
             raise HTTPException(status_code=403, detail="Verify your email address before signing in.")
         user_data = user
     request.state.authenticated_user = user_data
+    set_user_id(user_data["id"])
     return user_data
 
 
@@ -1216,7 +1238,7 @@ def _ensure_project_access(project_id: str, share_token: str | None = None, user
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
 
-        if user_id and project.get("owner_id") and project.get("owner_id") != user_id and user_id not in {"demo", "demo-user"}:
+        if user_id and project.get("owner_id") and project.get("owner_id") != user_id and (AUTH_REQUIRED or user_id not in {"demo", "demo-user"}):
             raise HTTPException(status_code=403, detail="Project does not belong to this user")
 
         if share_token is not None:
@@ -1230,7 +1252,7 @@ def _ensure_project_access(project_id: str, share_token: str | None = None, user
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
 
-        if user_id and user_id not in {"demo", "demo-user"} and project.owner_id != user_id:
+        if user_id and (AUTH_REQUIRED or user_id not in {"demo", "demo-user"}) and project.owner_id != user_id:
             raise HTTPException(status_code=403, detail="Project does not belong to this user")
 
         if share_token is not None:
@@ -2331,7 +2353,7 @@ def delete_pin(project_id: str, pin_id: str, request: Request) -> dict[str, obje
 
 
 @app.patch("/projects/{project_id}/pins/{pin_id}", response_model=PinResponse, tags=["pins"])
-def update_pin(project_id: str, pin_id: str, request: Request, payload: dict[str, Any]) -> PinResponse:
+def update_pin(project_id: str, pin_id: str, request: Request, payload: PinUpdateRequest) -> PinResponse:
     """Update a pin's photo or heading."""
     _ensure_project_ownership(project_id, _get_user_id(request))
     if PERSISTENCE_MODE == "database":
@@ -2339,8 +2361,8 @@ def update_pin(project_id: str, pin_id: str, request: Request, payload: dict[str
             pin = db.get(PinRecord, pin_id)
             if not pin or pin.project_id != project_id:
                 raise HTTPException(status_code=404, detail="Pin not found")
-            if "heading" in payload:
-                pin.heading = float(payload["heading"])
+            if payload.heading is not None:
+                pin.heading = payload.heading
             db.commit()
             db.refresh(pin)
             return _pin_response_from_record(pin)
@@ -2348,8 +2370,8 @@ def update_pin(project_id: str, pin_id: str, request: Request, payload: dict[str
     pin = pins_by_id.get(pin_id)
     if not pin or pin["project_id"] != project_id:
         raise HTTPException(status_code=404, detail="Pin not found")
-    if "heading" in payload:
-        pin["heading"] = float(payload["heading"])
+    if payload.heading is not None:
+        pin["heading"] = payload.heading
     return _pin_response_from_memory(pin)
 
 
@@ -2632,4 +2654,11 @@ def serve_static_file(file_name: str) -> FileResponse:
     raise HTTPException(status_code=404, detail="File not found")
 
 
-app.mount("/", StaticFiles(directory=str(FRONTEND_DIR)), name="frontend")
+class PublicFrontendFiles(StaticFiles):
+    async def get_response(self, path: str, scope: Any) -> Response:
+        if any(part.startswith(".") for part in path.replace("\\", "/").split("/") if part):
+            raise HTTPException(status_code=404, detail="Not Found")
+        return await super().get_response(path, scope)
+
+
+app.mount("/", PublicFrontendFiles(directory=str(FRONTEND_DIR)), name="frontend")
