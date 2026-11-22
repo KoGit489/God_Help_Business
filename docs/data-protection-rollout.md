@@ -18,6 +18,14 @@ RLS covers `projects`, `pins`, `annotations`, and `share_links`. Projects and ch
 4. Provision and migrate the schema out of band before deploying the runtime role. Set `DATABASE_URL` to the restricted runtime login and `DATABASE_REQUIRE_RLS=true`. In this mode the app skips schema creation/migrations and fails startup unless the four tables have enabled policies, owner/child policies are forced, the expected policy names/commands are present without additional policies, and the runtime role cannot bypass RLS through superuser, `BYPASSRLS`, ownership membership, `TRUNCATE`, privileged role membership, or policy-schema creation. This readiness check does not verify the exact policy expressions. Apply the reviewed SQL and test the actual effective grants separately.
 5. Run `TEST_POSTGRES_RLS_URL` against a disposable PostgreSQL database to execute `tests/test_postgres_rls.py`. Then test login, account recovery, creating/editing projects, pins, annotations and sharing as two owners, and valid, expired and revoked public share links. The integration test drops and recreates the four named tables and `casai_security` schema; only use it on a disposable database.
 
+For a staging app process, use `tools/run_staging_rls_app_check.py`. Set `STAGING_DATABASE_URL` to the restricted staging runtime connection string or enter it at the hidden prompt. The script starts FastAPI with local temporary storage, creates two temporary staging users, verifies owner isolation and a valid guest share, and deletes only the temporary users and project records. It will not use the live app environment or live Spaces bucket. Run it only against a staging database:
+
+```bash
+STAGING_DATABASE_URL='postgresql+psycopg://...' python tools/run_staging_rls_app_check.py
+```
+
+The staging database URL must use `verify-full` and the staging CA certificate. Do not put credentials in command arguments, shell history, CI logs or chat. The script verifies database startup/RLS readiness and application ownership behavior, but it does not yet test SMTP, the staging proxy, or real native-media uploads.
+
 RLS does not currently protect account/session/authentication tables. The current share-media route also remains owner-authenticated; this policy does not create guest access to media files. A separate migration workflow is required for future schema changes while strict RLS mode is active.
 
 ## Restore inventory drill
