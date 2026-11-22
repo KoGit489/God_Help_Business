@@ -18,13 +18,19 @@ RLS covers `projects`, `pins`, `annotations`, and `share_links`. Projects and ch
 4. Provision and migrate the schema out of band before deploying the runtime role. Set `DATABASE_URL` to the restricted runtime login and `DATABASE_REQUIRE_RLS=true`. In this mode the app skips schema creation/migrations and fails startup unless the four tables have enabled policies, owner/child policies are forced, the expected policy names/commands are present without additional policies, and the runtime role cannot bypass RLS through superuser, `BYPASSRLS`, ownership membership, `TRUNCATE`, privileged role membership, or policy-schema creation. This readiness check does not verify the exact policy expressions. Apply the reviewed SQL and test the actual effective grants separately.
 5. Run `TEST_POSTGRES_RLS_URL` against a disposable PostgreSQL database to execute `tests/test_postgres_rls.py`. Then test login, account recovery, creating/editing projects, pins, annotations and sharing as two owners, and valid, expired and revoked public share links. The integration test drops and recreates the four named tables and `casai_security` schema; only use it on a disposable database.
 
-For a staging app process, use `tools/run_staging_rls_app_check.py`. Set `STAGING_DATABASE_URL` to the restricted staging runtime connection string or enter it at the hidden prompt. The script starts FastAPI with local temporary storage, creates two temporary staging users, verifies owner isolation and a valid guest share, and deletes only the temporary users and project records. It will not use the live app environment or live Spaces bucket. Run it only against a staging database:
+For the currently provisioned staging database, `tools/run_staging_rls_app_check.py` checks the exact staging host and restricted runtime username, requires a different live `DATABASE_URL`, and forces `verify-full` with `/tmp/casai-staging-ca.crt`. Provision that staging CA in the app container and verify its authenticity separately before running. The app container must retain its live `DATABASE_URL` for the separation check; the checker replaces it only in its own process. Other inherited application settings are discarded, and the checker uses local temporary storage and an in-memory rate limiter.
+
+The production image does not include `tools`. After making the reviewed checker available on the server, copy it into the running container and use an interactive terminal for the hidden prompt:
 
 ```bash
-STAGING_DATABASE_URL='postgresql+psycopg://...' python tools/run_staging_rls_app_check.py
+cd /opt/God_Help_Business
+docker cp tools/run_staging_rls_app_check.py "$(docker compose --env-file .env.production -f docker-compose.prod.yml ps -q app):/tmp/casai-staging-check.py"
+docker compose --env-file .env.production -f docker-compose.prod.yml exec app python /tmp/casai-staging-check.py
 ```
 
-The staging database URL must use `verify-full` and the staging CA certificate. Do not put credentials in command arguments, shell history, CI logs or chat. The script verifies database startup/RLS readiness and application ownership behavior, but it does not yet test SMTP, the staging proxy, or real native-media uploads.
+Enter the staging runtime connection string only at the hidden prompt. Do not put credentials in command arguments, shell history, CI logs or chat. Do not use `exec -T` for this prompt. Both the script and CA copied into the container are ephemeral and must be copied again after the container is recreated.
+
+The checker verifies RLS readiness before inserting two temporary accounts, exercises owner isolation and valid, invalid, expired and revoked guest shares, and attempts targeted cleanup. If cleanup fails, it reports the temporary account IDs for investigation; do not assume those records were removed. The check does not exercise SMTP, the staging proxy, or real native-media uploads, and it does not replace a recovery drill.
 
 RLS does not currently protect account/session/authentication tables. The current share-media route also remains owner-authenticated; this policy does not create guest access to media files. A separate migration workflow is required for future schema changes while strict RLS mode is active.
 
