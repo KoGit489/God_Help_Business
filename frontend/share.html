@@ -40,10 +40,11 @@
       <button id="copy-link-btn" class="primary" type="button" style="margin-top: 1rem; width: 100%;">Copy review link</button>
       </div>
     </div>
+    <script src="security.js?v=2"></script>
     <script>
       function buildApiBases() {
         const params = new URLSearchParams(window.location.search);
-        const override = params.get('apiBase');
+        const override = safeApiBase(params.get('apiBase'));
         if (override) {
           return [override.replace(/\/$/, '')];
         }
@@ -129,7 +130,7 @@
           }
           pins.innerHTML = payload.pins
             .map((pin) => 
-              `<li><strong>${pin.captured_on}</strong> — heading ${pin.heading || 0}° · ${pin.latitude}, ${pin.longitude} · ${pin.photo_key || pin.native_file_key || 'no media file'}</li>`
+              `<li><strong>${escapeHtml(pin.captured_on)}</strong> — heading ${escapeHtml(pin.heading || 0)}° · ${escapeHtml(pin.latitude)}, ${escapeHtml(pin.longitude)} · ${escapeHtml(pin.photo_key || pin.native_file_key || 'no media file')}</li>`
             )
             .join('');
         } catch (error) {

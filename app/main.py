@@ -7,31 +7,48 @@ import os
 import re
 import secrets
 import shutil
+import smtplib
+import ssl
 import tempfile
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from email.message import EmailMessage
+from io import BytesIO
 from pathlib import Path
-from typing import Any
+from threading import RLock
+from typing import Any, Literal
+from urllib.parse import urlsplit
 from uuid import uuid4
 
+import pyotp
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerifyMismatchError
 from dotenv import load_dotenv
-from fastapi import Body, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
+from fastapi import BackgroundTasks, Body, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from limits import RateLimitItemPerMinute
+from limits.storage import storage_from_string
+from limits.strategies import MovingWindowRateLimiter
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import create_engine, inspect, select, text
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.analytics import record_event as record_analytics_event, summary as analytics_summary
 from app.camera_adapter import Insta360CameraAdapter
 from app.capture_processing import CaptureProcessor
-from app.models import AnnotationRecord, AuthSessionRecord, Base, PinRecord, ProjectRecord, ShareLinkRecord, UserRecord
+from app.media_client import process_media, process_media_path
+from app.mfa import decrypt_mfa_secret, match_totp_counter, mfa_cipher
+from app.models import AnnotationRecord, AuthSessionRecord, Base, EmailVerificationRecord, MfaCredentialRecord, MfaRecoveryCodeRecord, PasswordResetRecord, PinRecord, ProjectRecord, ShareLinkRecord, UserRecord
+from app.monitoring import configure_error_tracking
+from app.rls import assert_postgres_rls, set_share_token, set_user_id
 
 load_dotenv()
+configure_error_tracking(os.getenv("SENTRY_DSN", "").strip(), os.getenv("APP_ENV", "development"))
 
 logger = logging.getLogger("god_help_business.api")
 logging.basicConfig(level=logging.INFO)
@@ -50,6 +67,7 @@ PUBLIC_SHARE_BASE_URL = os.getenv("PUBLIC_SHARE_BASE_URL", "http://127.0.0.1:550
 SEED_DEMO_DATA = os.getenv("SEED_DEMO_DATA", "true").strip().lower() in {"1", "true", "yes"}
 AUTH_REQUIRED = os.getenv("AUTH_REQUIRED", "true").strip().lower() in {"1", "true", "yes"}
 ALLOW_ACCOUNT_REGISTRATION = os.getenv("ALLOW_ACCOUNT_REGISTRATION", "false").strip().lower() in {"1", "true", "yes"}
+EMAIL_VERIFICATION_REQUIRED = os.getenv("EMAIL_VERIFICATION_REQUIRED", "false").strip().lower() in {"1", "true", "yes"}
 SESSION_COOKIE_NAME = "casai_session"
 SESSION_TTL = timedelta(hours=int(os.getenv("SESSION_TTL_HOURS", "12")))
 SESSION_COOKIE_SECURE = os.getenv("SESSION_COOKIE_SECURE", "true").strip().lower() in {"1", "true", "yes"}
@@ -58,6 +76,11 @@ MAX_FLOOR_PLAN_UPLOAD_BYTES = int(os.getenv("MAX_FLOOR_PLAN_UPLOAD_BYTES", str(1
 MAX_NATIVE_UPLOAD_BYTES = int(os.getenv("MAX_NATIVE_UPLOAD_BYTES", str(2 * 1024 * 1024 * 1024)))
 MAX_REQUEST_BODY_BYTES = MAX_NATIVE_UPLOAD_BYTES + 1024 * 1024
 password_hasher = PasswordHasher()
+dummy_password_hash = password_hasher.hash(secrets.token_urlsafe(32))
+login_limiter = MovingWindowRateLimiter(storage_from_string(os.getenv("RATE_LIMIT_STORAGE_URI", "memory://")))
+LOGIN_ACCOUNT_LIMIT = RateLimitItemPerMinute(10)
+LOGIN_GLOBAL_LIMIT = RateLimitItemPerMinute(120)
+ANALYTICS_GLOBAL_LIMIT = RateLimitItemPerMinute(600)
 
 
 def _configured_cors_origins() -> list[str]:
@@ -74,6 +97,22 @@ def _configured_cors_origins() -> list[str]:
 
 
 ALLOWED_CORS_ORIGINS = _configured_cors_origins()
+
+
+def _validate_production_security() -> None:
+    if os.getenv("APP_ENV", "development").strip().lower() != "production":
+        return
+    if not AUTH_REQUIRED or not SESSION_COOKIE_SECURE:
+        raise RuntimeError("Production requires authentication and secure session cookies.")
+    if not os.getenv("MEDIA_WORKER_SOCKET", "").strip():
+        raise RuntimeError("Production requires an isolated media worker socket.")
+    if not ALLOWED_CORS_ORIGINS:
+        raise RuntimeError("Production requires at least one configured HTTPS origin.")
+    for origin in ALLOWED_CORS_ORIGINS:
+        parsed = urlsplit(origin)
+        if (parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password
+                or parsed.path not in {"", "/"} or parsed.query or parsed.fragment):
+            raise RuntimeError("Production origins must be exact HTTPS origins.")
 
 
 def _utc_now() -> datetime:
@@ -139,15 +178,34 @@ def _bootstrap_first_admin() -> None:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    _validate_production_security()
+    if not login_limiter.storage.check():
+        raise RuntimeError("Login rate-limit storage is unavailable.")
+    if EMAIL_VERIFICATION_REQUIRED:
+        if not AUTH_REQUIRED:
+            raise RuntimeError("Email verification requires authentication.")
+        try:
+            _password_reset_mail_settings()
+        except HTTPException as exc:
+            raise RuntimeError("Email verification requires valid SMTP and public-origin settings.") from exc
     if PERSISTENCE_MODE == "database":
         try:
-            Base.metadata.create_all(bind=engine)
-            _migrate_legacy_share_links()
-            project_columns = {column["name"] for column in inspect(engine).get_columns("projects")}
-            if "floor_plan_json" not in project_columns:
-                with engine.begin() as connection:
-                    connection.execute(text("ALTER TABLE projects ADD COLUMN floor_plan_json TEXT"))
-        except SQLAlchemyError as exc:
+            require_rls = os.getenv("DATABASE_REQUIRE_RLS", "false").strip().lower() in {"1", "true", "yes"}
+            if not require_rls:
+                Base.metadata.create_all(bind=engine)
+                _migrate_legacy_share_links()
+                project_columns = {column["name"] for column in inspect(engine).get_columns("projects")}
+                if "floor_plan_json" not in project_columns:
+                    with engine.begin() as connection:
+                        connection.execute(text("ALTER TABLE projects ADD COLUMN floor_plan_json TEXT"))
+                user_columns = {column["name"] for column in inspect(engine).get_columns("users")}
+                if "email_verified" not in user_columns:
+                    with engine.begin() as connection:
+                        connection.execute(text("ALTER TABLE users ADD COLUMN email_verified BOOLEAN NOT NULL DEFAULT TRUE"))
+            else:
+                with engine.connect() as connection:
+                    assert_postgres_rls(connection)
+        except (SQLAlchemyError, RuntimeError) as exc:
             logger.exception("Database startup failed")
             raise RuntimeError("Database initialization failed") from exc
     if AUTH_REQUIRED:
@@ -187,9 +245,20 @@ class ErrorEnvelope(BaseModel):
     error: dict[str, Any]
 
 
+class AnalyticsEventRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    event: Literal["dashboard_opened", "project_created"]
+    consent: Literal[True]
+
+
 class ProjectCreateRequest(BaseModel):
-    title: str = Field(min_length=1)
-    description: str | None = None
+    title: str = Field(min_length=1, max_length=255)
+    description: str | None = Field(default=None, max_length=1000)
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def strip_title(cls, value: Any) -> Any:
+        return value.strip() if isinstance(value, str) else value
 
 
 class ProjectResponse(BaseModel):
@@ -201,21 +270,27 @@ class ProjectResponse(BaseModel):
 
 
 class ProjectStatusUpdateRequest(BaseModel):
-    status: str = Field(min_length=1)
+    status: str = Field(min_length=1, max_length=64)
 
 
 class PinCreateRequest(BaseModel):
-    latitude: float
-    longitude: float
+    model_config = ConfigDict(allow_inf_nan=False)
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
     heading: float
     position_x: float | None = Field(default=None, ge=0, le=1)
     position_y: float | None = Field(default=None, ge=0, le=1)
     telemetry: dict[str, Any] | None = None
-    captured_on: str
-    photo_key: str | None = None
-    media_type: str | None = None
-    native_file_key: str | None = None
-    thumbnail_key: str | None = None
+    captured_on: str = Field(min_length=1, max_length=64)
+    photo_key: str | None = Field(default=None, max_length=500)
+    media_type: str | None = Field(default=None, max_length=64)
+    native_file_key: str | None = Field(default=None, max_length=500)
+    thumbnail_key: str | None = Field(default=None, max_length=500)
+
+
+class PinUpdateRequest(BaseModel):
+    model_config = ConfigDict(allow_inf_nan=False)
+    heading: float | None = None
 
 
 class PinCalibrationRequest(BaseModel):
@@ -322,6 +397,7 @@ class ShareLinkCreateRequest(BaseModel):
 class AuthLoginRequest(BaseModel):
     email: str = Field(min_length=3, max_length=254)
     password: str = Field(min_length=1, max_length=256)
+    mfa_code: str | None = Field(default=None, max_length=128)
 
 
 class AuthUserCreateRequest(BaseModel):
@@ -331,14 +407,37 @@ class AuthUserCreateRequest(BaseModel):
     is_admin: bool = False
 
 
+class AuthPasswordRequest(BaseModel):
+    password: str = Field(min_length=1, max_length=256)
+    mfa_code: str | None = Field(default=None, max_length=128)
+
+
+class MfaCodeRequest(BaseModel):
+    code: str = Field(min_length=6, max_length=128)
+
+
+class PasswordResetRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+
+
+class PasswordResetConfirm(BaseModel):
+    token: str = Field(min_length=32, max_length=128)
+    password: str = Field(min_length=12, max_length=256)
+
+
+class EmailVerificationConfirm(BaseModel):
+    token: str = Field(min_length=32, max_length=128)
+
+
 class AuthUserResponse(BaseModel):
     id: str
     email: str
     name: str
     is_admin: bool = False
+    email_verified: bool = True
 
 
-engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+engine = create_engine(DATABASE_URL, pool_pre_ping=True, hide_parameters=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 projects: dict[str, dict[str, Any]] = {}
@@ -352,15 +451,29 @@ share_links_by_project: dict[str, dict[str, Any]] = {}
 users_by_id: dict[str, dict[str, Any]] = {}
 users_by_email: dict[str, dict[str, Any]] = {}
 user_sessions_by_token_hash: dict[str, dict[str, Any]] = {}
+password_resets_by_token_hash: dict[str, dict[str, Any]] = {}
+email_verifications_by_token_hash: dict[str, dict[str, Any]] = {}
+mfa_credentials_by_user: dict[str, dict[str, Any]] = {}
+mfa_recovery_codes_by_hash: dict[str, str] = {}
+account_mutation_lock = RLock()
 
 
 @app.middleware("http")
 async def attach_request_id(request: Request, call_next):
     request_id = request.headers.get("x-request-id", str(uuid4()))
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", request_id):
+        request_id = str(uuid4())
     request.state.request_id = request_id
+    if os.getenv("APP_ENV", "development").strip().lower() == "production" and request.url.path in {"/docs", "/docs/", "/docs/oauth2-redirect", "/redoc", "/redoc/", "/openapi.json"}:
+        return JSONResponse(status_code=404, content={"error": {"type": "http_error", "message": "Not Found", "request_id": request_id}})
     content_length = request.headers.get("content-length")
+    is_upload = request.method == "POST" and request.url.path.endswith(("/floor-plan-upload", "/native-upload", "/upload"))
+    if request.method not in {"GET", "HEAD", "OPTIONS"} and (
+        request.headers.get("transfer-encoding") or (is_upload and content_length is None)
+    ):
+        return JSONResponse(status_code=411, content={"error": {"type": "length_required", "message": "A Content-Length is required for streamed requests and uploads.", "request_id": request_id}})
     if content_length:
-        request_body_limit = MAX_REQUEST_BODY_BYTES
+        request_body_limit = 1024 * 1024
         multipart_overhead = 1024 * 1024
         if request.url.path.endswith("/floor-plan-upload"):
             request_body_limit = MAX_FLOOR_PLAN_UPLOAD_BYTES + multipart_overhead
@@ -369,7 +482,10 @@ async def attach_request_id(request: Request, call_next):
         elif request.url.path.endswith("/upload"):
             request_body_limit = MAX_IMAGE_UPLOAD_BYTES + multipart_overhead
         try:
-            if int(content_length) > request_body_limit:
+            length = int(content_length)
+            if length < 0:
+                raise ValueError("Negative Content-Length")
+            if length > request_body_limit:
                 return JSONResponse(status_code=413, content={"error": {"type": "request_too_large", "message": "Request body exceeds the configured upload limit.", "request_id": request_id}})
         except ValueError:
             return JSONResponse(status_code=400, content={"error": {"type": "invalid_content_length", "message": "Content-Length must be an integer.", "request_id": request_id}})
@@ -379,30 +495,47 @@ async def attach_request_id(request: Request, call_next):
             return JSONResponse(status_code=403, content={"error": {"type": "origin_denied", "message": "Request origin is not allowed.", "request_id": request_id}})
         if AUTH_REQUIRED and request.cookies.get(SESSION_COOKIE_NAME) and not origin:
             return JSONResponse(status_code=403, content={"error": {"type": "csrf_check_failed", "message": "Authenticated state-changing requests must include an Origin header.", "request_id": request_id}})
+    upload_route = re.fullmatch(r"/projects/([^/]+)/(?:floor-plan-upload|pins/[^/]+/(?:native-upload|upload))", request.url.path)
+    if AUTH_REQUIRED and request.method == "POST" and upload_route:
+        try:
+            _ensure_project_ownership(upload_route.group(1), _get_user_id(request))
+        except HTTPException as exc:
+            return JSONResponse(status_code=exc.status_code, content={"error": {"type": "http_error", "message": exc.detail, "request_id": request_id}})
     response = await call_next(request)
     response.headers["x-request-id"] = request_id
+    if (request.url.path.startswith(("/auth/", "/projects", "/share/", "/media/", "/analytics/"))
+            and "no-store" not in response.headers.get("Cache-Control", "").lower()):
+        response.headers["Cache-Control"] = "private, no-store"
     return response
 
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    details = [{"loc": error["loc"], "msg": error["msg"], "type": error["type"]} for error in exc.errors()]
+    first_error = details[0] if details else None
+    field = ".".join(str(part) for part in first_error["loc"] if part not in {"body", "query", "path"}) if first_error else ""
+    message = f"{field}: {first_error['msg']}" if field and first_error else "Request validation failed"
     return JSONResponse(
         status_code=422,
         content={
             "error": {
                 "type": "validation_error",
-                "message": "Request validation failed",
+                "message": message,
                 "request_id": request.state.request_id,
-                "details": exc.errors(),
+                "details": details,
             }
         },
     )
 
 
+@app.exception_handler(StarletteHTTPException)
 @app.exception_handler(HTTPException)
-async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> Response:
+    if exc.status_code == 404 and request.method == "GET" and "text/html" in request.headers.get("accept", ""):
+        return FileResponse(FRONTEND_DIR / "404.html", status_code=404, headers=exc.headers)
     return JSONResponse(
         status_code=exc.status_code,
+        headers=exc.headers,
         content={
             "error": {
                 "type": "http_error",
@@ -440,10 +573,18 @@ def reset_demo_store() -> None:
     users_by_id.clear()
     users_by_email.clear()
     user_sessions_by_token_hash.clear()
+    password_resets_by_token_hash.clear()
+    email_verifications_by_token_hash.clear()
+    mfa_credentials_by_user.clear()
+    mfa_recovery_codes_by_hash.clear()
 
     if PERSISTENCE_MODE == "database":
         with SessionLocal() as db:
             db.query(AuthSessionRecord).delete()
+            db.query(PasswordResetRecord).delete()
+            db.query(EmailVerificationRecord).delete()
+            db.query(MfaRecoveryCodeRecord).delete()
+            db.query(MfaCredentialRecord).delete()
             db.query(UserRecord).delete()
             db.query(ShareLinkRecord).delete()
             db.query(AnnotationRecord).delete()
@@ -472,6 +613,13 @@ def _s3_client():
         raise HTTPException(status_code=500, detail="S3_BUCKET, S3_REGION, and S3_ENDPOINT_URL are required for S3 storage")
     if not os.getenv("AWS_ACCESS_KEY_ID") or not os.getenv("AWS_SECRET_ACCESS_KEY"):
         raise HTTPException(status_code=500, detail="Spaces access key credentials are not configured")
+    if os.getenv("APP_ENV", "development").strip().lower() == "production":
+        try:
+            endpoint = urlsplit(endpoint_url)
+            if endpoint.scheme != "https" or not endpoint.hostname or endpoint.username or endpoint.password or endpoint.query or endpoint.fragment:
+                raise ValueError("Invalid storage endpoint")
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail="Production storage requires a valid HTTPS endpoint without embedded credentials.") from exc
     return boto3.client("s3", region_name=region, endpoint_url=endpoint_url)
 
 
@@ -503,6 +651,18 @@ def _materialized_media_path(media_key: str):
             temp_path.unlink(missing_ok=True)
 
     return materialize()
+
+
+def _validate_capture_media_key(media_key: str, project_id: str, pin_id: str) -> None:
+    parts = media_key.split("/")
+    if (
+        parts[:3] != ["uploads", project_id, pin_id]
+        or len(parts) not in {4, 5}
+        or (len(parts) == 5 and parts[3] != "native")
+        or parts[-1] in {"", ".", ".."}
+        or "\\" in parts[-1]
+    ):
+        raise HTTPException(status_code=403, detail="Capture file does not belong to this waypoint.")
 
 
 def _validate_upload_file(upload: UploadFile, allowed_suffixes: set[str], max_bytes: int) -> None:
@@ -570,6 +730,15 @@ def _store_native_file(project_id: str, pin_id: str, upload: UploadFile) -> str:
     return native_key
 
 
+def _rasterize_floor_plan(file_data: bytes) -> bytes:
+    if os.getenv("MEDIA_WORKER_SOCKET", "").strip():
+        return process_media("pdf", BytesIO(file_data), len(file_data), ".pdf")[1]
+    import pymupdf
+
+    with pymupdf.open(stream=file_data, filetype="pdf") as document:
+        return document.load_page(0).get_pixmap(dpi=150).tobytes("png")
+
+
 def _store_floor_plan(project_id: str, upload: UploadFile) -> str:
     filename = Path(upload.filename or "floor-plan.bin").name
     destination = UPLOAD_DIR / "floorplans" / project_id
@@ -578,16 +747,12 @@ def _store_floor_plan(project_id: str, upload: UploadFile) -> str:
     content_type = upload.content_type or "application/octet-stream"
     if filename.lower().endswith(".pdf"):
         try:
-            import pymupdf
-            doc = pymupdf.open(stream=file_data, filetype="pdf")
-            page = doc.load_page(0)
-            pixmap = page.get_pixmap(dpi=150)
-            png_name = f"{Path(filename).stem}.png"
-            file_data = pixmap.tobytes("png")
-            filename = png_name
+            file_data = _rasterize_floor_plan(file_data)
+            filename = f"{Path(filename).stem}.png"
             content_type = "image/png"
-            doc.close()
         except Exception as exc:
+            if os.getenv("APP_ENV", "development").strip().lower() == "production":
+                raise HTTPException(status_code=503, detail="Floor plan processing is unavailable.") from exc
             logger.warning("PDF rasterization failed, keeping original: %s", exc)
 
     floor_plan_key = f"floorplans/{project_id}/{filename}"
@@ -616,6 +781,28 @@ def _store_preview(project_id: str, pin_id: str, preview_data: bytes) -> str:
         handle.write(preview_data)
 
     return preview_key
+
+
+def _process_capture_telemetry(telemetry: Any) -> dict[str, Any]:
+    if not os.getenv("MEDIA_WORKER_SOCKET", "").strip():
+        return capture_processor.process(telemetry)
+    payload = json.dumps(telemetry, allow_nan=False).encode("utf-8")
+    try:
+        _, output = process_media("telemetry", BytesIO(payload), len(payload), ".json")
+        result = json.loads(output)
+        if not isinstance(result, dict):
+            raise ValueError("Invalid media worker response.")
+        return result
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Capture processing is unavailable.") from exc
+
+
+def _extract_capture_preview(path: Path) -> dict[str, Any]:
+    if not os.getenv("MEDIA_WORKER_SOCKET", "").strip():
+        return capture_processor.extract_insp_preview(path)
+    metadata, output = process_media_path("preview", path)
+    metadata["preview_data"] = output
+    return metadata
 
 
 def _pin_response_from_record(record: PinRecord) -> PinResponse:
@@ -796,8 +983,11 @@ def _build_project_detail(project_id: str) -> ProjectDetailResponse:
 
 def _get_user_id(request: Request) -> str:
     if not AUTH_REQUIRED:
-        return request.headers.get("x-user-id") or "demo"
+        user_id = request.headers.get("x-user-id") or "demo"
+        set_user_id(user_id)
+        return user_id
     user = _authenticated_user(request)
+    set_user_id(user["id"])
     return user["id"]
 
 
@@ -808,6 +998,7 @@ def _session_token_hash(token: str) -> str:
 def _authenticated_user(request: Request) -> dict[str, Any]:
     cached = getattr(request.state, "authenticated_user", None)
     if cached:
+        set_user_id(cached["id"])
         return cached
     token = request.cookies.get(SESSION_COOKIE_NAME)
     if not token:
@@ -823,7 +1014,9 @@ def _authenticated_user(request: Request) -> dict[str, Any]:
             user = db.get(UserRecord, session.user_id)
             if not user or not user.is_active:
                 raise HTTPException(status_code=401, detail="This account is unavailable.")
-            user_data = {"id": user.id, "email": user.email, "name": user.name, "is_admin": user.is_admin, "is_active": user.is_active}
+            if EMAIL_VERIFICATION_REQUIRED and not user.email_verified:
+                raise HTTPException(status_code=403, detail="Verify your email address before signing in.")
+            user_data = {"id": user.id, "email": user.email, "name": user.name, "is_admin": user.is_admin, "is_active": user.is_active, "email_verified": user.email_verified}
     else:
         session = user_sessions_by_token_hash.get(token_hash)
         if not session or session.get("revoked_at") is not None or _as_utc(session["expires_at"]) <= now:
@@ -831,24 +1024,79 @@ def _authenticated_user(request: Request) -> dict[str, Any]:
         user = users_by_id.get(session["user_id"])
         if not user or not user.get("is_active", True):
             raise HTTPException(status_code=401, detail="This account is unavailable.")
+        if EMAIL_VERIFICATION_REQUIRED and not user.get("email_verified", True):
+            raise HTTPException(status_code=403, detail="Verify your email address before signing in.")
         user_data = user
     request.state.authenticated_user = user_data
+    set_user_id(user_data["id"])
     return user_data
 
 
-def _set_login_session(response: Response, request: Request, user_id: str) -> None:
+def _consume_mfa_database(db: Session, user_id: str, code: str | None) -> None:
+    credential = db.scalar(select(MfaCredentialRecord).where(MfaCredentialRecord.user_id == user_id).with_for_update())
+    if not credential or not credential.enabled:
+        return
+    if not code:
+        raise HTTPException(status_code=401, detail="Enter an authenticator or recovery code.")
+    code = code.strip()
+    if code.startswith("recovery-"):
+        code_hash = _session_token_hash(code)
+        recovery = db.scalar(select(MfaRecoveryCodeRecord).where(MfaRecoveryCodeRecord.code_hash == code_hash, MfaRecoveryCodeRecord.user_id == user_id).with_for_update())
+        if not recovery:
+            raise HTTPException(status_code=401, detail="Authenticator or recovery code is incorrect or has already been used.")
+        db.delete(recovery)
+        return
+    counter = match_totp_counter(decrypt_mfa_secret(credential.encrypted_secret), code, _utc_now().timestamp(), credential.last_counter)
+    if counter is None:
+        raise HTTPException(status_code=401, detail="Authenticator or recovery code is incorrect or has already been used.")
+    credential.last_counter = counter
+
+
+def _consume_mfa_memory(user_id: str, code: str | None) -> None:
+    credential = mfa_credentials_by_user.get(user_id)
+    if not credential or not credential["enabled"]:
+        return
+    if not code:
+        raise HTTPException(status_code=401, detail="Enter an authenticator or recovery code.")
+    code = code.strip()
+    if code.startswith("recovery-"):
+        code_hash = _session_token_hash(code)
+        if mfa_recovery_codes_by_hash.get(code_hash) != user_id:
+            raise HTTPException(status_code=401, detail="Authenticator or recovery code is incorrect or has already been used.")
+        del mfa_recovery_codes_by_hash[code_hash]
+        return
+    counter = match_totp_counter(decrypt_mfa_secret(credential["encrypted_secret"]), code, _utc_now().timestamp(), credential["last_counter"])
+    if counter is None:
+        raise HTTPException(status_code=401, detail="Authenticator or recovery code is incorrect or has already been used.")
+    credential["last_counter"] = counter
+
+
+def _set_login_session(response: Response, request: Request, user_id: str, expected_password_hash: str, mfa_code: str | None) -> None:
     raw_token = secrets.token_urlsafe(32)
     now = _utc_now()
     expires_at = now + SESSION_TTL
     token_hash = _session_token_hash(raw_token)
     if PERSISTENCE_MODE == "database":
         with SessionLocal() as db:
+            user = db.scalar(select(UserRecord).where(UserRecord.id == user_id).with_for_update())
+            if not user or not user.is_active or user.password_hash != expected_password_hash:
+                raise HTTPException(status_code=401, detail="Email or password is incorrect.")
+            if EMAIL_VERIFICATION_REQUIRED and not user.email_verified:
+                raise HTTPException(status_code=403, detail="Verify your email address before signing in.")
+            _consume_mfa_database(db, user_id, mfa_code)
             db.add(AuthSessionRecord(token_hash=token_hash, user_id=user_id, created_at=now, expires_at=expires_at))
             db.commit()
     else:
-        user_sessions_by_token_hash[token_hash] = {
-            "user_id": user_id, "created_at": now, "expires_at": expires_at, "revoked_at": None,
-        }
+        with account_mutation_lock:
+            user = users_by_id.get(user_id)
+            if not user or not user.get("is_active", True) or user["password_hash"] != expected_password_hash:
+                raise HTTPException(status_code=401, detail="Email or password is incorrect.")
+            if EMAIL_VERIFICATION_REQUIRED and not user.get("email_verified", True):
+                raise HTTPException(status_code=403, detail="Verify your email address before signing in.")
+            _consume_mfa_memory(user_id, mfa_code)
+            user_sessions_by_token_hash[token_hash] = {
+                "user_id": user_id, "created_at": now, "expires_at": expires_at, "revoked_at": None,
+            }
     response.set_cookie(
         SESSION_COOKIE_NAME,
         raw_token,
@@ -864,11 +1112,90 @@ def _clear_login_session(response: Response) -> None:
     response.delete_cookie(SESSION_COOKIE_NAME, path="/", httponly=True, secure=SESSION_COOKIE_SECURE, samesite="strict")
 
 
+def _password_matches(password_hash: str, password: str) -> bool:
+    try:
+        return bool(password_hasher.verify(password_hash, password))
+    except (VerifyMismatchError, InvalidHashError):
+        return False
+
+
+def _limit_mfa_action(email: str) -> None:
+    account_key = hashlib.sha256(email.strip().lower().encode("utf-8")).hexdigest()
+    if not login_limiter.hit(LOGIN_GLOBAL_LIMIT, "mfa-global") or not login_limiter.hit(LOGIN_ACCOUNT_LIMIT, "mfa-account", account_key):
+        raise HTTPException(status_code=429, detail="Too many attempts. Please wait a minute and try again.", headers={"Retry-After": "60"})
+
+
+def _revoke_other_sessions_database(db: Session, user_id: str, request: Request) -> None:
+    current_hash = _session_token_hash(request.cookies.get(SESSION_COOKIE_NAME, ""))
+    db.query(AuthSessionRecord).filter(AuthSessionRecord.user_id == user_id, AuthSessionRecord.token_hash != current_hash).delete(synchronize_session=False)
+
+
+def _revoke_other_sessions_memory(user_id: str, request: Request) -> None:
+    current_hash = _session_token_hash(request.cookies.get(SESSION_COOKIE_NAME, ""))
+    for token_hash, session in list(user_sessions_by_token_hash.items()):
+        if session["user_id"] == user_id and token_hash != current_hash:
+            del user_sessions_by_token_hash[token_hash]
+
+
 def _validate_account_email(email: str) -> str:
     normalized = email.strip().lower()
     if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", normalized):
         raise HTTPException(status_code=422, detail="Enter a valid email address.")
     return normalized
+
+
+def _password_reset_mail_settings() -> dict[str, Any]:
+    host = os.getenv("SMTP_HOST", "").strip()
+    sender = os.getenv("SMTP_FROM", "").strip()
+    username = os.getenv("SMTP_USERNAME", "").strip()
+    password = os.getenv("SMTP_PASSWORD", "")
+    domain = os.getenv("APP_DOMAIN", "").strip().rstrip("/")
+    origin = os.getenv("PUBLIC_APP_ORIGIN", "").strip().rstrip("/") or (f"https://{domain}" if domain else "")
+    try:
+        port = int(os.getenv("SMTP_PORT", "587"))
+        parsed = urlsplit(origin)
+        valid_origin = parsed.scheme in {"http", "https"} and bool(parsed.hostname) and not parsed.username and not parsed.password and parsed.path in {"", "/"} and not parsed.query and not parsed.fragment
+        if os.getenv("APP_ENV", "development").strip().lower() == "production":
+            valid_origin = valid_origin and parsed.scheme == "https" and origin in ALLOWED_CORS_ORIGINS
+        if not host or not sender or "\n" in sender or "\r" in sender or bool(username) != bool(password) or not valid_origin or not 1 <= port <= 65535:
+            raise ValueError("Invalid mail configuration")
+    except ValueError:
+        raise HTTPException(status_code=503, detail="Email delivery is not configured. Contact your administrator.") from None
+    return {"host": host, "port": port, "sender": sender, "username": username, "password": password, "origin": origin}
+
+
+def _send_account_email(settings: dict[str, Any], recipient: str, subject: str, body: str) -> None:
+    try:
+        message = EmailMessage()
+        message["Subject"] = subject
+        message["From"] = settings["sender"]
+        message["To"] = recipient
+        message.set_content(body)
+        with smtplib.SMTP(settings["host"], settings["port"], timeout=10) as smtp:
+            smtp.starttls(context=ssl.create_default_context())
+            if settings["username"]:
+                smtp.login(settings["username"], settings["password"])
+            smtp.send_message(message)
+    except Exception:
+        logger.warning("Account email delivery failed; check the SMTP configuration.")
+
+
+def _send_password_reset_email(settings: dict[str, Any], recipient: str, token: str) -> None:
+    _send_account_email(
+        settings, recipient, "CASAI password reset",
+        "A password reset was requested for your CASAI account. This link expires in 30 minutes "
+        "and can be used once. If you did not request it, you can ignore this message.\n\n"
+        f"{settings['origin']}/reset-password.html#token={token}\n",
+    )
+
+
+def _send_verification_email(settings: dict[str, Any], recipient: str, token: str) -> None:
+    _send_account_email(
+        settings, recipient, "Verify your CASAI email",
+        "Please verify your email address for your CASAI account. This link expires in 24 hours "
+        "and can be used once. If you did not expect this message, you can ignore it.\n\n"
+        f"{settings['origin']}/verify-email.html#token={token}\n",
+    )
 
 
 def _get_user_by_email(email: str) -> dict[str, Any] | None:
@@ -880,7 +1207,7 @@ def _get_user_by_email(email: str) -> dict[str, Any] | None:
             return {
                 "id": user.id, "email": user.email, "name": user.name,
                 "password_hash": user.password_hash, "is_admin": user.is_admin,
-                "is_active": user.is_active,
+                "is_active": user.is_active, "email_verified": user.email_verified,
             }
     return users_by_email.get(email)
 
@@ -911,7 +1238,7 @@ def _ensure_project_access(project_id: str, share_token: str | None = None, user
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
 
-        if user_id and project.get("owner_id") and project.get("owner_id") != user_id and user_id not in {"demo", "demo-user"}:
+        if user_id and project.get("owner_id") and project.get("owner_id") != user_id and (AUTH_REQUIRED or user_id not in {"demo", "demo-user"}):
             raise HTTPException(status_code=403, detail="Project does not belong to this user")
 
         if share_token is not None:
@@ -925,7 +1252,7 @@ def _ensure_project_access(project_id: str, share_token: str | None = None, user
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
 
-        if user_id and user_id not in {"demo", "demo-user"} and project.owner_id != user_id:
+        if user_id and (AUTH_REQUIRED or user_id not in {"demo", "demo-user"}) and project.owner_id != user_id:
             raise HTTPException(status_code=403, detail="Project does not belong to this user")
 
         if share_token is not None:
@@ -1068,34 +1395,301 @@ def get_current_user(request: Request) -> AuthUserResponse:
     if not AUTH_REQUIRED:
         return AuthUserResponse(id="demo-user", email="demo@God_Help_Business.local", name="Demo Builder", is_admin=True)
     user = _authenticated_user(request)
-    return AuthUserResponse(id=user["id"], email=user["email"], name=user["name"], is_admin=user["is_admin"])
+    return AuthUserResponse(id=user["id"], email=user["email"], name=user["name"], is_admin=user["is_admin"], email_verified=user.get("email_verified", True))
+
+
+@app.get("/auth/mfa", tags=["auth"])
+def get_mfa_status(request: Request, response: Response) -> dict[str, bool]:
+    user = _authenticated_user(request)
+    try:
+        mfa_cipher()
+        available = True
+    except HTTPException:
+        available = False
+    if PERSISTENCE_MODE == "database":
+        with SessionLocal() as db:
+            credential = db.get(MfaCredentialRecord, user["id"])
+            enabled = bool(credential and credential.enabled)
+    else:
+        credential = mfa_credentials_by_user.get(user["id"])
+        enabled = bool(credential and credential["enabled"])
+    response.headers["Cache-Control"] = "no-store"
+    return {"enabled": enabled, "available": available}
+
+
+@app.post("/auth/mfa/setup", tags=["auth"])
+def setup_mfa(payload: AuthPasswordRequest, request: Request, response: Response) -> dict[str, str]:
+    user = _authenticated_user(request)
+    _limit_mfa_action(user["email"])
+    cipher = mfa_cipher()
+    secret = pyotp.random_base32()
+    encrypted_secret = cipher.encrypt(secret.encode("ascii")).decode("ascii")
+    if PERSISTENCE_MODE == "database":
+        with SessionLocal() as db:
+            account = db.scalar(select(UserRecord).where(UserRecord.id == user["id"]).with_for_update())
+            if not account or not account.is_active or not _password_matches(account.password_hash, payload.password):
+                raise HTTPException(status_code=401, detail="Password is incorrect.")
+            credential = db.get(MfaCredentialRecord, user["id"])
+            if credential and credential.enabled:
+                raise HTTPException(status_code=409, detail="Authenticator is already enabled.")
+            if not credential:
+                credential = MfaCredentialRecord(user_id=user["id"], encrypted_secret=encrypted_secret, enabled=False, last_counter=-1)
+                db.add(credential)
+            else:
+                credential.encrypted_secret = encrypted_secret
+                credential.last_counter = -1
+            db.commit()
+    else:
+        with account_mutation_lock:
+            account = users_by_id.get(user["id"])
+            if not account or not account.get("is_active", True) or not _password_matches(account["password_hash"], payload.password):
+                raise HTTPException(status_code=401, detail="Password is incorrect.")
+            credential = mfa_credentials_by_user.get(user["id"])
+            if credential and credential["enabled"]:
+                raise HTTPException(status_code=409, detail="Authenticator is already enabled.")
+            mfa_credentials_by_user[user["id"]] = {"encrypted_secret": encrypted_secret, "enabled": False, "last_counter": -1}
+    response.headers["Cache-Control"] = "no-store"
+    return {"secret": secret, "provisioning_uri": pyotp.TOTP(secret).provisioning_uri(name=user["email"], issuer_name="CASAI")}
+
+
+@app.post("/auth/mfa/enable", tags=["auth"])
+def enable_mfa(payload: MfaCodeRequest, request: Request, response: Response) -> dict[str, list[str]]:
+    user = _authenticated_user(request)
+    _limit_mfa_action(user["email"])
+    recovery_codes = [f"recovery-{secrets.token_urlsafe(16)}" for _ in range(10)]
+    if PERSISTENCE_MODE == "database":
+        with SessionLocal() as db:
+            account = db.scalar(select(UserRecord).where(UserRecord.id == user["id"]).with_for_update())
+            credential = db.scalar(select(MfaCredentialRecord).where(MfaCredentialRecord.user_id == user["id"]).with_for_update()) if account else None
+            if not account or not account.is_active or not credential or credential.enabled:
+                raise HTTPException(status_code=409, detail="Start authenticator setup first.")
+            counter = match_totp_counter(decrypt_mfa_secret(credential.encrypted_secret), payload.code.strip(), _utc_now().timestamp(), credential.last_counter)
+            if counter is None:
+                raise HTTPException(status_code=401, detail="Authenticator code is incorrect or has already been used.")
+            credential.enabled = True
+            credential.last_counter = counter
+            db.query(MfaRecoveryCodeRecord).filter(MfaRecoveryCodeRecord.user_id == user["id"]).delete(synchronize_session=False)
+            db.add_all([MfaRecoveryCodeRecord(code_hash=_session_token_hash(code), user_id=user["id"]) for code in recovery_codes])
+            _revoke_other_sessions_database(db, user["id"], request)
+            db.commit()
+    else:
+        with account_mutation_lock:
+            account = users_by_id.get(user["id"])
+            credential = mfa_credentials_by_user.get(user["id"])
+            if not account or not account.get("is_active", True) or not credential or credential["enabled"]:
+                raise HTTPException(status_code=409, detail="Start authenticator setup first.")
+            counter = match_totp_counter(decrypt_mfa_secret(credential["encrypted_secret"]), payload.code.strip(), _utc_now().timestamp(), credential["last_counter"])
+            if counter is None:
+                raise HTTPException(status_code=401, detail="Authenticator code is incorrect or has already been used.")
+            credential["enabled"] = True
+            credential["last_counter"] = counter
+            for code_hash, owner_id in list(mfa_recovery_codes_by_hash.items()):
+                if owner_id == user["id"]:
+                    del mfa_recovery_codes_by_hash[code_hash]
+            for code in recovery_codes:
+                mfa_recovery_codes_by_hash[_session_token_hash(code)] = user["id"]
+            _revoke_other_sessions_memory(user["id"], request)
+    response.headers["Cache-Control"] = "no-store"
+    return {"recovery_codes": recovery_codes}
+
+
+@app.post("/auth/mfa/disable", status_code=204, tags=["auth"])
+def disable_mfa(payload: AuthPasswordRequest, request: Request) -> Response:
+    user = _authenticated_user(request)
+    _limit_mfa_action(user["email"])
+    if PERSISTENCE_MODE == "database":
+        with SessionLocal() as db:
+            account = db.scalar(select(UserRecord).where(UserRecord.id == user["id"]).with_for_update())
+            credential = db.scalar(select(MfaCredentialRecord).where(MfaCredentialRecord.user_id == user["id"]).with_for_update()) if account else None
+            if not account or not account.is_active or not _password_matches(account.password_hash, payload.password):
+                raise HTTPException(status_code=401, detail="Password is incorrect.")
+            if not credential or not credential.enabled:
+                raise HTTPException(status_code=409, detail="Authenticator is not enabled.")
+            _consume_mfa_database(db, user["id"], payload.mfa_code)
+            db.flush()
+            db.query(MfaRecoveryCodeRecord).filter(MfaRecoveryCodeRecord.user_id == user["id"]).delete(synchronize_session=False)
+            db.delete(credential)
+            _revoke_other_sessions_database(db, user["id"], request)
+            db.commit()
+    else:
+        with account_mutation_lock:
+            account = users_by_id.get(user["id"])
+            credential = mfa_credentials_by_user.get(user["id"])
+            if not account or not account.get("is_active", True) or not _password_matches(account["password_hash"], payload.password):
+                raise HTTPException(status_code=401, detail="Password is incorrect.")
+            if not credential or not credential["enabled"]:
+                raise HTTPException(status_code=409, detail="Authenticator is not enabled.")
+            _consume_mfa_memory(user["id"], payload.mfa_code)
+            for code_hash, owner_id in list(mfa_recovery_codes_by_hash.items()):
+                if owner_id == user["id"]:
+                    del mfa_recovery_codes_by_hash[code_hash]
+            del mfa_credentials_by_user[user["id"]]
+            _revoke_other_sessions_memory(user["id"], request)
+    return Response(status_code=204, headers={"Cache-Control": "no-store"})
+
+
+@app.post("/auth/email-verification/request", status_code=202, tags=["auth"])
+def request_email_verification(payload: PasswordResetRequest, background_tasks: BackgroundTasks) -> dict[str, str]:
+    settings = _password_reset_mail_settings()
+    email = _validate_account_email(payload.email)
+    account_key = hashlib.sha256(email.encode("utf-8")).hexdigest()
+    if not login_limiter.hit(LOGIN_GLOBAL_LIMIT, "verify-global") or not login_limiter.hit(LOGIN_ACCOUNT_LIMIT, "verify-account", account_key):
+        raise HTTPException(status_code=429, detail="Too many requests. Please wait a minute and try again.", headers={"Retry-After": "60"})
+    raw_token = secrets.token_urlsafe(32)
+    token_hash = _session_token_hash(raw_token)
+    expires_at = _utc_now() + timedelta(hours=24)
+    found = False
+    if PERSISTENCE_MODE == "database":
+        with SessionLocal() as db:
+            user = db.scalar(select(UserRecord).where(UserRecord.email == email).with_for_update())
+            if user and user.is_active and not user.email_verified:
+                db.query(EmailVerificationRecord).filter(EmailVerificationRecord.user_id == user.id).delete(synchronize_session=False)
+                db.add(EmailVerificationRecord(token_hash=token_hash, user_id=user.id, expires_at=expires_at))
+                db.commit()
+                found = True
+    else:
+        with account_mutation_lock:
+            user = users_by_email.get(email)
+            if user and user.get("is_active", True) and not user.get("email_verified", True):
+                for existing_hash, verification in list(email_verifications_by_token_hash.items()):
+                    if verification["user_id"] == user["id"]:
+                        del email_verifications_by_token_hash[existing_hash]
+                email_verifications_by_token_hash[token_hash] = {"user_id": user["id"], "expires_at": expires_at}
+                found = True
+    if found:
+        background_tasks.add_task(_send_verification_email, settings, email, raw_token)
+    return {"message": "If the account needs verification, an email will be sent."}
+
+
+@app.post("/auth/email-verification/confirm", status_code=204, tags=["auth"])
+def confirm_email_verification(payload: EmailVerificationConfirm) -> Response:
+    token_hash = _session_token_hash(payload.token)
+    if not login_limiter.hit(LOGIN_GLOBAL_LIMIT, "verify-confirm-global") or not login_limiter.hit(LOGIN_ACCOUNT_LIMIT, "verify-confirm-token", token_hash):
+        raise HTTPException(status_code=429, detail="Too many requests. Please wait a minute and try again.", headers={"Retry-After": "60"})
+    now = _utc_now()
+    if PERSISTENCE_MODE == "database":
+        with SessionLocal() as db:
+            initial = db.get(EmailVerificationRecord, token_hash)
+            user = db.scalar(select(UserRecord).where(UserRecord.id == initial.user_id).with_for_update()) if initial else None
+            verification = db.scalar(select(EmailVerificationRecord).where(EmailVerificationRecord.token_hash == token_hash).with_for_update()) if user else None
+            if not verification or not user or not user.is_active or _as_utc(verification.expires_at) <= now:
+                raise HTTPException(status_code=400, detail="This verification link is invalid or expired.")
+            user.email_verified = True
+            db.query(EmailVerificationRecord).filter(EmailVerificationRecord.user_id == user.id).delete(synchronize_session=False)
+            db.commit()
+    else:
+        with account_mutation_lock:
+            verification = email_verifications_by_token_hash.get(token_hash)
+            user = users_by_id.get(verification["user_id"]) if verification else None
+            if not verification or not user or not user.get("is_active", True) or _as_utc(verification["expires_at"]) <= now:
+                raise HTTPException(status_code=400, detail="This verification link is invalid or expired.")
+            user["email_verified"] = True
+            for existing_hash, existing_verification in list(email_verifications_by_token_hash.items()):
+                if existing_verification["user_id"] == user["id"]:
+                    del email_verifications_by_token_hash[existing_hash]
+    return Response(status_code=204)
+
+
+@app.post("/auth/password-reset/request", status_code=202, tags=["auth"])
+def request_password_reset(payload: PasswordResetRequest, background_tasks: BackgroundTasks) -> dict[str, str]:
+    settings = _password_reset_mail_settings()
+    email = _validate_account_email(payload.email)
+    account_key = hashlib.sha256(email.encode("utf-8")).hexdigest()
+    if not login_limiter.hit(LOGIN_GLOBAL_LIMIT, "reset-global") or not login_limiter.hit(LOGIN_ACCOUNT_LIMIT, "reset-account", account_key):
+        raise HTTPException(status_code=429, detail="Too many requests. Please wait a minute and try again.", headers={"Retry-After": "60"})
+    raw_token = secrets.token_urlsafe(32)
+    token_hash = _session_token_hash(raw_token)
+    expires_at = _utc_now() + timedelta(minutes=30)
+    found = False
+    if PERSISTENCE_MODE == "database":
+        with SessionLocal() as db:
+            user = db.scalar(select(UserRecord).where(UserRecord.email == email).with_for_update())
+            if user and user.is_active:
+                db.query(PasswordResetRecord).filter(PasswordResetRecord.user_id == user.id).delete(synchronize_session=False)
+                db.add(PasswordResetRecord(token_hash=token_hash, user_id=user.id, expires_at=expires_at))
+                db.commit()
+                found = True
+    else:
+        with account_mutation_lock:
+            user = users_by_email.get(email)
+            if user and user.get("is_active", True):
+                for existing_hash, reset in list(password_resets_by_token_hash.items()):
+                    if reset["user_id"] == user["id"]:
+                        del password_resets_by_token_hash[existing_hash]
+                password_resets_by_token_hash[token_hash] = {"user_id": user["id"], "expires_at": expires_at}
+                found = True
+    if found:
+        background_tasks.add_task(_send_password_reset_email, settings, email, raw_token)
+    return {"message": "If the account exists, a reset email will be sent."}
+
+
+@app.post("/auth/password-reset/confirm", status_code=204, tags=["auth"])
+def confirm_password_reset(payload: PasswordResetConfirm) -> Response:
+    token_hash = _session_token_hash(payload.token)
+    if not login_limiter.hit(LOGIN_GLOBAL_LIMIT, "reset-confirm-global") or not login_limiter.hit(LOGIN_ACCOUNT_LIMIT, "reset-confirm-token", token_hash):
+        raise HTTPException(status_code=429, detail="Too many requests. Please wait a minute and try again.", headers={"Retry-After": "60"})
+    now = _utc_now()
+    if PERSISTENCE_MODE == "database":
+        with SessionLocal() as db:
+            initial = db.get(PasswordResetRecord, token_hash)
+            user = db.scalar(select(UserRecord).where(UserRecord.id == initial.user_id).with_for_update()) if initial else None
+            reset = db.scalar(select(PasswordResetRecord).where(PasswordResetRecord.token_hash == token_hash).with_for_update()) if user else None
+            if not reset or not user or not user.is_active or _as_utc(reset.expires_at) <= now:
+                raise HTTPException(status_code=400, detail="This reset link is invalid or expired.")
+            user.password_hash = password_hasher.hash(payload.password)
+            db.query(AuthSessionRecord).filter(AuthSessionRecord.user_id == user.id).delete(synchronize_session=False)
+            db.query(PasswordResetRecord).filter(PasswordResetRecord.user_id == user.id).delete(synchronize_session=False)
+            db.commit()
+    else:
+        with account_mutation_lock:
+            reset = password_resets_by_token_hash.get(token_hash)
+            user = users_by_id.get(reset["user_id"]) if reset else None
+            if not reset or not user or not user.get("is_active", True) or _as_utc(reset["expires_at"]) <= now:
+                raise HTTPException(status_code=400, detail="This reset link is invalid or expired.")
+            user["password_hash"] = password_hasher.hash(payload.password)
+            for existing_hash, session in list(user_sessions_by_token_hash.items()):
+                if session["user_id"] == user["id"]:
+                    del user_sessions_by_token_hash[existing_hash]
+            for existing_hash, existing_reset in list(password_resets_by_token_hash.items()):
+                if existing_reset["user_id"] == user["id"]:
+                    del password_resets_by_token_hash[existing_hash]
+    return Response(status_code=204)
 
 
 @app.post("/auth/login", response_model=AuthUserResponse, tags=["auth"])
 def login(payload: AuthLoginRequest, request: Request, response: Response) -> AuthUserResponse:
+    account_key = hashlib.sha256(payload.email.strip().lower().encode("utf-8")).hexdigest()
+    if not login_limiter.hit(LOGIN_GLOBAL_LIMIT, "login-global") or not login_limiter.hit(LOGIN_ACCOUNT_LIMIT, "login-account", account_key):
+        raise HTTPException(status_code=429, detail="Too many sign-in attempts. Please wait a minute and try again.", headers={"Retry-After": "60"})
     email = _validate_account_email(payload.email)
     user = _get_user_by_email(email)
-    password_hash = user.get("password_hash") if user else None
+    password_hash = user.get("password_hash") if user else dummy_password_hash
     password_valid = False
-    if password_hash:
-        try:
-            password_valid = password_hasher.verify(password_hash, payload.password)
-        except (VerifyMismatchError, InvalidHashError):
-            password_valid = False
+    try:
+        password_valid = password_hasher.verify(password_hash, payload.password)
+    except (VerifyMismatchError, InvalidHashError):
+        password_valid = False
     if not user or not user.get("is_active", True) or not password_valid:
         raise HTTPException(status_code=401, detail="Email or password is incorrect.")
+    if EMAIL_VERIFICATION_REQUIRED and not user.get("email_verified", True):
+        raise HTTPException(status_code=403, detail="Verify your email address before signing in.")
     if password_hasher.check_needs_rehash(password_hash):
         new_hash = password_hasher.hash(payload.password)
         if PERSISTENCE_MODE == "database":
             with SessionLocal() as db:
-                record = db.get(UserRecord, user["id"])
-                if record:
-                    record.password_hash = new_hash
-                    db.commit()
+                record = db.scalar(select(UserRecord).where(UserRecord.id == user["id"]).with_for_update())
+                if not record or record.password_hash != password_hash:
+                    raise HTTPException(status_code=401, detail="Email or password is incorrect.")
+                record.password_hash = new_hash
+                db.commit()
         else:
-            user["password_hash"] = new_hash
-    _set_login_session(response, request, user["id"])
-    return AuthUserResponse(id=user["id"], email=user["email"], name=user["name"], is_admin=user["is_admin"])
+            with account_mutation_lock:
+                if user["password_hash"] != password_hash:
+                    raise HTTPException(status_code=401, detail="Email or password is incorrect.")
+                user["password_hash"] = new_hash
+        password_hash = new_hash
+    _set_login_session(response, request, user["id"], password_hash, payload.mfa_code)
+    return AuthUserResponse(id=user["id"], email=user["email"], name=user["name"], is_admin=user["is_admin"], email_verified=user.get("email_verified", True))
 
 
 @app.post("/auth/logout", status_code=204, tags=["auth"])
@@ -1118,8 +1712,80 @@ def logout(request: Request, response: Response) -> Response:
     return response
 
 
+@app.delete("/auth/me", status_code=204, tags=["auth"])
+def delete_current_account(payload: AuthPasswordRequest, request: Request, response: Response) -> Response:
+    if not AUTH_REQUIRED:
+        raise HTTPException(status_code=403, detail="Account deletion requires authentication.")
+    actor = _authenticated_user(request)
+    account_key = hashlib.sha256(actor["email"].strip().lower().encode("utf-8")).hexdigest()
+    if not login_limiter.hit(LOGIN_GLOBAL_LIMIT, "login-global") or not login_limiter.hit(LOGIN_ACCOUNT_LIMIT, "login-account", account_key):
+        raise HTTPException(status_code=429, detail="Too many attempts. Please wait a minute and try again.", headers={"Retry-After": "60"})
+
+    if PERSISTENCE_MODE == "database":
+        with SessionLocal() as db:
+            admins = []
+            if actor["is_admin"]:
+                admins = db.scalars(select(UserRecord).where(UserRecord.is_admin.is_(True), UserRecord.is_active.is_(True)).order_by(UserRecord.id).with_for_update()).all()
+            user = db.scalar(select(UserRecord).where(UserRecord.id == actor["id"]).with_for_update())
+            if not user or not user.is_active:
+                raise HTTPException(status_code=401, detail="This account is unavailable.")
+            try:
+                password_valid = password_hasher.verify(user.password_hash, payload.password)
+            except (VerifyMismatchError, InvalidHashError):
+                password_valid = False
+            if not password_valid:
+                raise HTTPException(status_code=401, detail="Password is incorrect.")
+            if user.is_admin and len(admins) <= 1:
+                raise HTTPException(status_code=409, detail="The last active administrator cannot be deleted.")
+            if db.scalar(select(ProjectRecord.id).where(ProjectRecord.owner_id == user.id).limit(1)):
+                raise HTTPException(status_code=409, detail="This account owns projects. Contact an administrator before deletion.")
+            _consume_mfa_database(db, user.id, payload.mfa_code)
+            db.flush()
+            db.query(AuthSessionRecord).filter(AuthSessionRecord.user_id == user.id).delete(synchronize_session=False)
+            db.query(PasswordResetRecord).filter(PasswordResetRecord.user_id == user.id).delete(synchronize_session=False)
+            db.query(EmailVerificationRecord).filter(EmailVerificationRecord.user_id == user.id).delete(synchronize_session=False)
+            db.query(MfaRecoveryCodeRecord).filter(MfaRecoveryCodeRecord.user_id == user.id).delete(synchronize_session=False)
+            db.query(MfaCredentialRecord).filter(MfaCredentialRecord.user_id == user.id).delete(synchronize_session=False)
+            db.delete(user)
+            db.commit()
+    else:
+        with account_mutation_lock:
+            user = users_by_id.get(actor["id"])
+            if not user or not user.get("is_active", True):
+                raise HTTPException(status_code=401, detail="This account is unavailable.")
+            try:
+                password_valid = password_hasher.verify(user["password_hash"], payload.password)
+            except (VerifyMismatchError, InvalidHashError):
+                password_valid = False
+            if not password_valid:
+                raise HTTPException(status_code=401, detail="Password is incorrect.")
+            if user["is_admin"] and sum(bool(item.get("is_admin") and item.get("is_active", True)) for item in users_by_id.values()) <= 1:
+                raise HTTPException(status_code=409, detail="The last active administrator cannot be deleted.")
+            if any(project.get("owner_id") == user["id"] for project in projects.values()):
+                raise HTTPException(status_code=409, detail="This account owns projects. Contact an administrator before deletion.")
+            _consume_mfa_memory(user["id"], payload.mfa_code)
+            for token_hash, session in list(user_sessions_by_token_hash.items()):
+                if session["user_id"] == user["id"]:
+                    del user_sessions_by_token_hash[token_hash]
+            for token_hash, reset in list(password_resets_by_token_hash.items()):
+                if reset["user_id"] == user["id"]:
+                    del password_resets_by_token_hash[token_hash]
+            for token_hash, verification in list(email_verifications_by_token_hash.items()):
+                if verification["user_id"] == user["id"]:
+                    del email_verifications_by_token_hash[token_hash]
+            for code_hash, owner_id in list(mfa_recovery_codes_by_hash.items()):
+                if owner_id == user["id"]:
+                    del mfa_recovery_codes_by_hash[code_hash]
+            mfa_credentials_by_user.pop(user["id"], None)
+            users_by_email.pop(user["email"], None)
+            del users_by_id[user["id"]]
+    _clear_login_session(response)
+    response.status_code = 204
+    return response
+
+
 @app.post("/auth/users", response_model=AuthUserResponse, status_code=201, tags=["auth"])
-def create_account(payload: AuthUserCreateRequest, request: Request) -> AuthUserResponse:
+def create_account(payload: AuthUserCreateRequest, request: Request, background_tasks: BackgroundTasks) -> AuthUserResponse:
     actor = _authenticated_user(request) if AUTH_REQUIRED else {"is_admin": True}
     if not actor.get("is_admin"):
         raise HTTPException(status_code=403, detail="Administrator access is required to create accounts.")
@@ -1127,21 +1793,36 @@ def create_account(payload: AuthUserCreateRequest, request: Request) -> AuthUser
     existing = _get_user_by_email(email)
     if existing:
         raise HTTPException(status_code=409, detail="An account with this email already exists.")
+    settings = _password_reset_mail_settings() if EMAIL_VERIFICATION_REQUIRED else None
+    raw_token = secrets.token_urlsafe(32) if settings else None
     user_data = {
         "id": str(uuid4()), "email": email, "name": payload.name.strip(),
         "password_hash": password_hasher.hash(payload.password),
-        "is_admin": payload.is_admin, "is_active": True,
+        "is_admin": payload.is_admin, "is_active": True, "email_verified": False,
     }
     if not user_data["name"]:
         raise HTTPException(status_code=422, detail="Name cannot be blank.")
     if PERSISTENCE_MODE == "database":
         with SessionLocal() as db:
             db.add(UserRecord(**user_data))
-            db.commit()
+            if raw_token:
+                db.add(EmailVerificationRecord(token_hash=_session_token_hash(raw_token), user_id=user_data["id"], expires_at=_utc_now() + timedelta(hours=24)))
+            try:
+                db.commit()
+            except IntegrityError:
+                db.rollback()
+                raise HTTPException(status_code=409, detail="An account with this email already exists.") from None
     else:
-        users_by_email[email] = user_data
-        users_by_id[user_data["id"]] = user_data
-    return AuthUserResponse(id=user_data["id"], email=email, name=user_data["name"], is_admin=user_data["is_admin"])
+        with account_mutation_lock:
+            if email in users_by_email:
+                raise HTTPException(status_code=409, detail="An account with this email already exists.")
+            users_by_email[email] = user_data
+            users_by_id[user_data["id"]] = user_data
+            if raw_token:
+                email_verifications_by_token_hash[_session_token_hash(raw_token)] = {"user_id": user_data["id"], "expires_at": _utc_now() + timedelta(hours=24)}
+    if settings and raw_token:
+        background_tasks.add_task(_send_verification_email, settings, email, raw_token)
+    return AuthUserResponse(id=user_data["id"], email=email, name=user_data["name"], is_admin=user_data["is_admin"], email_verified=False)
 
 
 @app.get("/camera/insta360/status", response_model=CameraStatusResponse, tags=["camera"])
@@ -1174,6 +1855,41 @@ def capture_processing_status() -> dict[str, object]:
     }
 
 
+def _analytics_enabled() -> bool:
+    return PERSISTENCE_MODE == "database" and os.getenv("ANALYTICS_ENABLED", "false").strip().lower() in {"1", "true", "yes"}
+
+
+@app.get("/analytics/config", tags=["analytics"])
+def get_analytics_config(request: Request) -> dict[str, bool]:
+    if AUTH_REQUIRED:
+        _authenticated_user(request)
+    return {"enabled": _analytics_enabled()}
+
+
+@app.post("/analytics/events", status_code=204, tags=["analytics"])
+def submit_analytics_event(payload: AnalyticsEventRequest, request: Request) -> Response:
+    if AUTH_REQUIRED:
+        _authenticated_user(request)
+    if not _analytics_enabled():
+        raise HTTPException(status_code=404, detail="Analytics is disabled.")
+    if not login_limiter.hit(ANALYTICS_GLOBAL_LIMIT, "analytics-global"):
+        raise HTTPException(status_code=429, detail="Analytics rate limit exceeded.")
+    with SessionLocal() as db:
+        record_analytics_event(db, payload.event, _utc_now().date())
+    return Response(status_code=204)
+
+
+@app.get("/analytics/summary", tags=["analytics"])
+def get_analytics_summary(request: Request) -> dict[str, Any]:
+    actor = _authenticated_user(request) if AUTH_REQUIRED else {"is_admin": True}
+    if not actor.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Administrator access is required.")
+    if not _analytics_enabled():
+        raise HTTPException(status_code=404, detail="Analytics is disabled.")
+    with SessionLocal() as db:
+        return {"retention_days": 90, "daily": analytics_summary(db, _utc_now().date())}
+
+
 @app.post("/projects/{project_id}/visual-odometry", tags=["capture-processing"])
 def project_visual_odometry(project_id: str, request: Request) -> dict[str, object]:
     """Estimate motion across the ordered preview frames of a project's pins."""
@@ -1197,6 +1913,8 @@ def project_visual_odometry(project_id: str, request: Request) -> dict[str, obje
     if not frame_paths:
         return {"source": "visual_odometry", "available": True, "segments": [], "message": "No preview frames are available yet. Save waypoints with native .insp/.insv files first."}
 
+    if os.getenv("MEDIA_WORKER_SOCKET", "").strip():
+        raise HTTPException(status_code=503, detail="Visual odometry is unavailable in isolated processing mode.")
     return capture_processor.estimate_visual_motion(frame_paths)
 
 
@@ -1205,6 +1923,10 @@ def create_project(payload: ProjectCreateRequest, request: Request) -> ProjectRe
     user_id = _get_user_id(request)
     if PERSISTENCE_MODE == "database":
         with SessionLocal() as db:
+            if AUTH_REQUIRED:
+                user = db.scalar(select(UserRecord).where(UserRecord.id == user_id).with_for_update())
+                if not user or not user.is_active:
+                    raise HTTPException(status_code=401, detail="This account is unavailable.")
             project = ProjectRecord(
                 id=str(uuid4()),
                 owner_id=user_id,
@@ -1222,16 +1944,19 @@ def create_project(payload: ProjectCreateRequest, request: Request) -> ProjectRe
                 status=project.status,
             )
 
-    project_id = str(uuid4())
-    project = {
-        "id": project_id,
-        "owner_id": user_id,
-        "title": payload.title,
-        "description": payload.description,
-        "status": "draft",
-    }
-    projects[project_id] = project
-    pins_by_project[project_id] = []
+    with account_mutation_lock:
+        if AUTH_REQUIRED and (user_id not in users_by_id or not users_by_id[user_id].get("is_active", True)):
+            raise HTTPException(status_code=401, detail="This account is unavailable.")
+        project_id = str(uuid4())
+        project = {
+            "id": project_id,
+            "owner_id": user_id,
+            "title": payload.title,
+            "description": payload.description,
+            "status": "draft",
+        }
+        projects[project_id] = project
+        pins_by_project[project_id] = []
     return ProjectResponse(id=project_id, title=project["title"], description=project["description"], pin_count=0, status="draft")
 
 
@@ -1372,6 +2097,7 @@ def revoke_share_link(project_id: str, request: Request) -> Response:
 @app.get("/share/{share_token}", response_model=ProjectDetailResponse, tags=["projects"])
 def open_shared_project(share_token: str) -> ProjectDetailResponse:
     if PERSISTENCE_MODE == "database":
+        set_share_token(share_token)
         with SessionLocal() as db:
             link = db.get(ShareLinkRecord, share_token)
             if not link or link.revoked_at is not None or _as_utc(link.expires_at) <= _utc_now():
@@ -1627,7 +2353,7 @@ def delete_pin(project_id: str, pin_id: str, request: Request) -> dict[str, obje
 
 
 @app.patch("/projects/{project_id}/pins/{pin_id}", response_model=PinResponse, tags=["pins"])
-def update_pin(project_id: str, pin_id: str, request: Request, payload: dict[str, Any]) -> PinResponse:
+def update_pin(project_id: str, pin_id: str, request: Request, payload: PinUpdateRequest) -> PinResponse:
     """Update a pin's photo or heading."""
     _ensure_project_ownership(project_id, _get_user_id(request))
     if PERSISTENCE_MODE == "database":
@@ -1635,8 +2361,8 @@ def update_pin(project_id: str, pin_id: str, request: Request, payload: dict[str
             pin = db.get(PinRecord, pin_id)
             if not pin or pin.project_id != project_id:
                 raise HTTPException(status_code=404, detail="Pin not found")
-            if "heading" in payload:
-                pin.heading = float(payload["heading"])
+            if payload.heading is not None:
+                pin.heading = payload.heading
             db.commit()
             db.refresh(pin)
             return _pin_response_from_record(pin)
@@ -1644,8 +2370,8 @@ def update_pin(project_id: str, pin_id: str, request: Request, payload: dict[str
     pin = pins_by_id.get(pin_id)
     if not pin or pin["project_id"] != project_id:
         raise HTTPException(status_code=404, detail="Pin not found")
-    if "heading" in payload:
-        pin["heading"] = float(payload["heading"])
+    if payload.heading is not None:
+        pin["heading"] = payload.heading
     return _pin_response_from_memory(pin)
 
 
@@ -1735,7 +2461,7 @@ def process_pin_capture(project_id: str, pin_id: str, request: Request) -> dict[
             if not pin or pin.project_id != project_id:
                 raise HTTPException(status_code=404, detail="Pin not found")
             telemetry = json.loads(pin.telemetry_json) if pin.telemetry_json else None
-            result = capture_processor.process(telemetry)
+            result = _process_capture_telemetry(telemetry)
             pin.processing_status = str(result["status"])
             pin.processing_error = None if result["status"] == "ready" else str(result["message"])
             
@@ -1756,10 +2482,11 @@ def process_pin_capture(project_id: str, pin_id: str, request: Request) -> dict[
                 pin.photo_key = None
 
             if pin.native_file_key and not pin.preview_key:
+                _validate_capture_media_key(pin.native_file_key, project_id, pin_id)
                 try:
                     with _materialized_media_path(pin.native_file_key) as native_file_path:
                         if native_file_path.exists():
-                            preview_result = capture_processor.extract_insp_preview(native_file_path)
+                            preview_result = _extract_capture_preview(native_file_path)
                             if preview_result.get("preview_available") and preview_result.get("preview_data"):
                                 pin.preview_key = _store_preview(project_id, pin_id, preview_result["preview_data"])
                             else:
@@ -1774,7 +2501,7 @@ def process_pin_capture(project_id: str, pin_id: str, request: Request) -> dict[
     pin = pins_by_id.get(pin_id)
     if not pin or pin["project_id"] != project_id:
         raise HTTPException(status_code=404, detail="Pin not found")
-    result = capture_processor.process(pin.get("telemetry"))
+    result = _process_capture_telemetry(pin.get("telemetry"))
     pin["processing_status"] = str(result["status"])
     pin["processing_error"] = None if result["status"] == "ready" else str(result["message"])
     
@@ -1794,10 +2521,11 @@ def process_pin_capture(project_id: str, pin_id: str, request: Request) -> dict[
         pin["photo_key"] = None
 
     if pin.get("native_file_key") and not pin.get("preview_key"):
+        _validate_capture_media_key(pin["native_file_key"], project_id, pin_id)
         try:
             with _materialized_media_path(pin["native_file_key"]) as native_file_path:
                 if native_file_path.exists():
-                    preview_result = capture_processor.extract_insp_preview(native_file_path)
+                    preview_result = _extract_capture_preview(native_file_path)
                     if preview_result.get("preview_available") and preview_result.get("preview_data"):
                         pin["preview_key"] = _store_preview(project_id, pin_id, preview_result["preview_data"])
                     else:
@@ -1851,6 +2579,12 @@ def serve_media(media_path: str, request: Request):
         raise HTTPException(status_code=404, detail="Media file not found")
     media_namespace, project_id = media_parts[:2]
     _ensure_project_ownership(project_id, _get_user_id(request))
+    is_native = media_namespace == "uploads" and len(media_parts) > 3 and media_parts[3] == "native"
+    safe_types = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp", ".pdf": "application/pdf"}
+    media_type = safe_types.get(Path(media_path).suffix.lower(), "application/octet-stream") if not is_native else "application/octet-stream"
+    headers = {"Cache-Control": "private, max-age=300", "X-Content-Type-Options": "nosniff"}
+    if media_type == "application/octet-stream":
+        headers["Content-Disposition"] = "attachment"
 
     if STORAGE_BACKEND == "s3":
         if not media_path.startswith(f"{media_namespace}/{project_id}/"):
@@ -1870,13 +2604,12 @@ def serve_media(media_path: str, request: Request):
             finally:
                 body.close()
 
-        headers = {"Cache-Control": "private, max-age=300"}
         content_length = object_response.get("ContentLength")
         if content_length is not None:
             headers["Content-Length"] = str(content_length)
         return StreamingResponse(
             stream_object(),
-            media_type=object_response.get("ContentType", "application/octet-stream"),
+            media_type=media_type,
             headers=headers,
         )
 
@@ -1890,7 +2623,7 @@ def serve_media(media_path: str, request: Request):
     ).resolve()
     if upload_root not in requested_path.parents or project_root not in requested_path.parents or not requested_path.is_file():
         raise HTTPException(status_code=404, detail="Media file not found")
-    return FileResponse(requested_path, headers={"Cache-Control": "private, max-age=300"})
+    return FileResponse(requested_path, media_type=media_type, headers=headers)
 
 
 @app.get("/index.html")
@@ -1921,4 +2654,11 @@ def serve_static_file(file_name: str) -> FileResponse:
     raise HTTPException(status_code=404, detail="File not found")
 
 
-app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")
+class PublicFrontendFiles(StaticFiles):
+    async def get_response(self, path: str, scope: Any) -> Response:
+        if any(part.startswith(".") for part in path.replace("\\", "/").split("/") if part):
+            raise HTTPException(status_code=404, detail="Not Found")
+        return await super().get_response(path, scope)
+
+
+app.mount("/", PublicFrontendFiles(directory=str(FRONTEND_DIR)), name="frontend")

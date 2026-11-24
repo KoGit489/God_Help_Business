@@ -41,6 +41,7 @@ function loadFloorplan({ panorama = false } = {}) {
     document: { getElementById: element, querySelectorAll: () => created.filter((node) => node.parent && node.className.includes('nav-arrow')), createElement },
   });
   const source = fs.readFileSync(path.join(__dirname, '../frontend/floorplan.js'), 'utf8');
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../frontend/security.js'), 'utf8'), context);
   vm.runInContext(source.replace(/loadProjects\(\);\s*$/, ''), context);
   vm.runInContext('renderWaypoints = () => {};', context);
   return { element, panoramas, run: (code) => vm.runInContext(code, context) };
@@ -314,4 +315,11 @@ test('direct capture opens center yellow arrows at each waypoint and white at th
     const arrow = config.hotSpots.find((hotspot) => hotspot.cssClass === 'nav-hotspot') || config.hotSpots[0];
     assert.equal(config.yaw, arrow.yaw);
   });
+});
+
+test('plan annotations escape markup from stored notes', () => {
+  const { element, run } = loadFloorplan();
+  run("state.annotations = [{ status: 'open', body: '<img src=x onerror=alert(1)>' }]; renderAnnotationList();");
+  assert.ok(element('annotation-list').innerHTML.includes('&lt;img src=x onerror=alert(1)&gt;'));
+  assert.ok(!element('annotation-list').innerHTML.includes('<img src=x'));
 });

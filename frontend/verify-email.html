@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Verify Email | CASAI</title>
+    <link rel="icon" href="assets/logo.png" type="image/png" />
+    <link rel="stylesheet" href="styles.css?v=4" />
+    <style>
+      .verification-shell { max-width: 520px; }
+      .verification-form { display: grid; gap: 0.8rem; }
+      .verification-form[hidden] { display: none; }
+      .verification-status { min-height: 1.5rem; color: var(--muted); }
+    </style>
+  </head>
+  <body>
+    <main class="app-shell verification-shell">
+      <header class="site-header">
+        <div class="brand">
+          <img class="brand-logo" src="assets/logo.png" alt="CASAI logo" />
+          <div class="brand-text"><span class="eyebrow">CASAI</span><h1>Verify email</h1></div>
+        </div>
+      </header>
+      <section class="card stack">
+        <form id="verification-request-form" class="verification-form">
+          <label>Email<input id="verification-email" type="email" autocomplete="username" maxlength="254" required /></label>
+          <button type="submit" class="primary">Send verification link</button>
+        </form>
+        <form id="verification-confirm-form" class="verification-form" hidden>
+          <button type="submit" class="primary">Verify email</button>
+        </form>
+        <p id="verification-status" class="verification-status" role="status" aria-live="polite"></p>
+        <a href="login.html">Back to sign in</a>
+      </section>
+    </main>
+    <script src="verify-email.js?v=2"></script>
+  </body>
+</html>

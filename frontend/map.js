@@ -1,6 +1,6 @@
 function buildApiBases() {
   const params = new URLSearchParams(window.location.search);
-  const override = params.get('apiBase');
+  const override = safeApiBase(params.get('apiBase'));
   if (override) {
     return [override.replace(/\/$/, '')];
   }
@@ -69,7 +69,7 @@ function renderNativeUploadPreview(file) {
   if (isImage) {
     const reader = new FileReader();
     reader.onload = (event) => {
-      nativePreviewBody.innerHTML = `<img class="native-preview-image" src="${event.target?.result || ''}" alt="360 preview" />`;
+      nativePreviewBody.innerHTML = `<img class="native-preview-image" src="${escapeHtml(event.target?.result || '')}" alt="360 preview" />`;
     };
     reader.readAsDataURL(file);
     return;
@@ -79,14 +79,14 @@ function renderNativeUploadPreview(file) {
     nativePreviewBody.innerHTML = `
       <div class="native-placeholder">
         Native Insta360 X6 file preserved for upload.<br />
-        <strong>${file.name}</strong><br />
+        <strong>${escapeHtml(file.name)}</strong><br />
         Browser testing remains available while the original capture is kept intact.
       </div>
     `;
     return;
   }
 
-  nativePreviewBody.innerHTML = `<div class="native-placeholder">Preview is available for image files. Native capture is preserved for later processing: <strong>${file.name}</strong></div>`;
+  nativePreviewBody.innerHTML = `<div class="native-placeholder">Preview is available for image files. Native capture is preserved for later processing: <strong>${escapeHtml(file.name)}</strong></div>`;
 }
 
 async function loadCameraStatus() {
@@ -141,9 +141,9 @@ async function apiRequest(path, options = {}) {
         lastError = new Error(apiMessage);
         continue;
       }
-      throw new Error(apiMessage);
+      throw Object.assign(new Error(apiMessage), { apiResponse: true });
     } catch (error) {
-      if (error.authRequired) throw error;
+      if (error.authRequired || error.apiResponse || !['GET', 'HEAD'].includes((options.method || 'GET').toUpperCase())) throw error;
       lastError = error;
     }
   }
@@ -256,7 +256,7 @@ async function loadRecentPins(projectId) {
 
     recent.innerHTML = `<strong>Recent pins</strong><ul>${pins
       .slice(-3)
-      .map((pin) => `<li>${pin.captured_on} · heading ${pin.heading}° · ${pin.media_type || 'photo'}</li>`)
+      .map((pin) => `<li>${escapeHtml(pin.captured_on)} · heading ${escapeHtml(pin.heading)}° · ${escapeHtml(pin.media_type || 'photo')}</li>`)
       .join('')}</ul>`;
   } catch (error) {
     recent.innerHTML = '<strong>Unable to load recent pins.</strong>';
