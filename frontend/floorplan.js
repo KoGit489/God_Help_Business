@@ -19,7 +19,23 @@ function redirectToLogin() {
   window.location.assign(`/login.html?next=${next}`);
 }
 
-function setStatus(text) { byId('plan-status').textContent = text; }
+function setStatus(text, kind = '') {
+  const el = byId('plan-status');
+  el.textContent = text;
+  el.className = kind ? `status is-${kind}` : 'status';
+}
+
+function closeViewer() {
+  byId('viewer-modal').classList.remove('open');
+  byId('photo-compass').style.display = 'none';
+  stopArrowLoop();
+  clearNavArrows();
+  state.viewerPin = null;
+  if (state.viewer) {
+    state.viewer.destroy();
+    state.viewer = null;
+  }
+}
 function headers(options = {}) { return new Headers(options.headers || {}); }
 
 async function apiRequest(path, options = {}) {
@@ -315,6 +331,8 @@ function openCapture(pin, number, initialYaw = null) {
   trackNavHistory(pin);
   byId('viewer-title').textContent = `Capture #${number} · heading ${pin.heading || 0}°`;
   byId('viewer-modal').classList.add('open');
+  const closeButton = byId('close-viewer');
+  if (typeof closeButton.focus === 'function') closeButton.focus();
   const previewKey = [pin.photo_key, pin.thumbnail_key].find((key) => key && !isNativeCaptureKey(key));
   const imageUrl = mediaUrl(previewKey) || pin.preview_url || null;
   byId('plain-preview').style.display = 'none'; byId('panorama').style.display = 'block';
@@ -552,7 +570,15 @@ byId('update-mode').addEventListener('change', (event) => {
 });
 byId('enable-sensors').addEventListener('click', enableSensors);
 byId('set-gps').addEventListener('click', () => { if (!navigator.geolocation) { byId('telemetry-status').textContent = 'GPS is not available in this browser.'; return; } navigator.geolocation.getCurrentPosition(() => { byId('telemetry-status').textContent = 'GPS is available. Click the plan to calibrate its matching starting point.'; }, () => { byId('telemetry-status').textContent = 'GPS permission was unavailable; the calibrated demo route is still ready.'; }); });
-byId('close-viewer').addEventListener('click', () => { byId('viewer-modal').classList.remove('open'); byId('photo-compass').style.display = 'none'; stopArrowLoop(); clearNavArrows(); state.viewerPin = null; if (state.viewer) { state.viewer.destroy(); state.viewer = null; } });
+byId('close-viewer').addEventListener('click', closeViewer);
+if (typeof document.addEventListener === 'function') {
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && byId('viewer-modal').classList.contains('open')) {
+      event.preventDefault();
+      closeViewer();
+    }
+  });
+}
 byId('prev-capture').addEventListener('click', () => stepViewer(-1));
 byId('next-capture').addEventListener('click', () => stepViewer(1));
 byId('panorama').addEventListener('click', handleViewerClick);

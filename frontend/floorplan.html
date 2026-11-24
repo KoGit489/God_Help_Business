@@ -2,89 +2,520 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>CASAI Floor Plan Walkthrough</title>
     <link rel="icon" href="assets/logo.png" type="image/png" />
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.css" />
     <link rel="stylesheet" href="styles.css?v=5" />
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <style>
-      .shell { max-width: 1240px; margin: 0 auto; padding: 1.2rem; }
-      .layout { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(290px, 0.75fr); gap: 1rem; align-items: start; }
-      .layout > *, .layout .panel { min-width: 0; }
-      .controls { display: grid; gap: 0.7rem; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .full { grid-column: 1 / -1; }
-      .plan-wrap { position: relative; min-height: 520px; display: grid; place-items: center; overflow: auto; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 0.75rem; }
+      body.plan-page { background: var(--bg); }
+
+      .shell {
+        max-width: 1280px;
+        margin: 0 auto;
+        padding: 0.85rem 1rem 1.5rem;
+      }
+
+      .shell > .site-header {
+        margin-bottom: 0.65rem;
+      }
+
+      .shell .brand-logo { width: 40px; height: 40px; }
+      .shell .brand-text h1 { font-size: 1.1rem; }
+
+      .plan-context {
+        display: grid;
+        gap: 0.55rem;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        padding: 0.65rem 0.75rem;
+        margin-bottom: 0.75rem;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-lg);
+      }
+
+      .plan-context label { gap: 0.25rem; }
+      .plan-context .full { grid-column: 1 / -1; }
+
+      .layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1.65fr) minmax(300px, 0.8fr);
+        gap: 0.85rem;
+        align-items: start;
+      }
+
+      .layout > *,
+      .layout .panel { min-width: 0; }
+
+      .plan-stage-panel {
+        display: grid;
+        gap: 0.65rem;
+        padding: 0.75rem;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-lg);
+      }
+
+      .plan-wrap {
+        position: relative;
+        min-height: min(62vh, 640px);
+        display: grid;
+        place-items: center;
+        overflow: auto;
+        background: var(--surface-muted);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        padding: 0.5rem;
+      }
+
       .plan-stage { position: relative; display: inline-block; max-width: 100%; line-height: 0; }
-      .plan-stage img { display: block; max-width: min(100%, 1000px); max-height: 70vh; width: auto; height: auto; background: white; }
-      .plan-stage canvas { display: block; max-width: min(100%, 1000px); max-height: 70vh; width: 100%; height: auto; background: white; }
-      .plan-empty { min-height: 400px; display: grid; place-items: center; text-align: center; color: var(--muted); font-size: 1rem; padding: 2rem; }
+      .plan-stage img {
+        display: block;
+        max-width: min(100%, 1100px);
+        max-height: 70vh;
+        width: auto;
+        height: auto;
+        background: white;
+      }
+      .plan-stage canvas {
+        display: block;
+        max-width: min(100%, 1100px);
+        max-height: 70vh;
+        width: 100%;
+        height: auto;
+        background: white;
+      }
+      .plan-stage iframe { display: block; }
+      .plan-empty {
+        min-height: 360px;
+        display: grid;
+        place-items: center;
+        text-align: center;
+        color: var(--muted);
+        font-size: 0.95rem;
+        padding: 2rem;
+      }
+
       #waypoint-layer { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
       #plan-overlay { position: absolute; inset: 0; z-index: 1; }
-      .plan-stage iframe { display: block; }
-      .waypoint { position: absolute; width: 12px; height: 12px; min-width: 0; min-height: 0; padding: 0; transform: translate(-50%, -50%); border: 0; border-radius: 50%; background: var(--gold-dark); box-shadow: 0 0 0 1.5px #fff; cursor: pointer; z-index: 3; pointer-events: auto; }
+
+      .waypoint {
+        position: absolute;
+        width: 12px;
+        height: 12px;
+        min-width: 0;
+        min-height: 0;
+        padding: 0;
+        transform: translate(-50%, -50%);
+        border: 0;
+        border-radius: 50%;
+        background: var(--accent-dark);
+        box-shadow: 0 0 0 1.5px #fff;
+        cursor: pointer;
+        z-index: 3;
+        pointer-events: auto;
+      }
       .waypoint::before { content: ""; position: absolute; inset: -12px; border-radius: 50%; }
-      .waypoint.current { width: 8px; height: 8px; background: var(--ink); animation: pulse 1.5s infinite; }
-      @media (prefers-reduced-motion: reduce) { .waypoint.current { animation: none; } }
-      .waypoint::after { content: attr(data-label); position: absolute; left: 10px; top: 6px; white-space: nowrap; color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 0.2rem 0.35rem; font-size: 0.72rem; font-weight: 700; }
-      @keyframes pulse { 50% { box-shadow: 0 0 0 4px rgba(20, 23, 26, 0.18); } }
-      .heading-ticks { position: relative; height: 1.5rem; margin: 0 8px; font-size: 0.72rem; font-weight: 700; color: var(--muted); }
-      .heading-ticks span { position: absolute; left: var(--tick); transform: translateX(-50%); white-space: nowrap; }
+      .waypoint.current {
+        width: 8px;
+        height: 8px;
+        background: var(--ink);
+        animation: pulse 1.5s infinite;
+      }
+      .waypoint::after {
+        content: attr(data-label);
+        position: absolute;
+        left: 10px;
+        top: 6px;
+        white-space: nowrap;
+        color: var(--ink);
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        padding: 0.2rem 0.35rem;
+        font-size: 0.72rem;
+        font-weight: 700;
+      }
+      @keyframes pulse { 50% { box-shadow: 0 0 0 4px rgba(26, 29, 33, 0.18); } }
+      @media (prefers-reduced-motion: reduce) {
+        .waypoint.current { animation: none; }
+      }
+
+      .readout {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 0.45rem;
+      }
+      .readout div {
+        background: var(--bg-elevated);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        padding: 0.55rem;
+        text-align: center;
+        font-size: 0.75rem;
+        font-weight: 600;
+        color: var(--ink-soft);
+      }
+      .readout span {
+        display: block;
+        margin-top: 0.15rem;
+        font-family: var(--font-mono);
+        font-size: 0.9rem;
+        color: var(--accent-dark);
+      }
+
+      .status {
+        min-height: 1.35rem;
+        padding: 0.5rem 0.65rem;
+        border-radius: var(--radius-md);
+        border: 1px solid var(--border);
+        background: var(--bg-elevated);
+        color: var(--ink-soft);
+        font-size: 0.84rem;
+      }
+      .status.is-success {
+        border-color: #a7d9bf;
+        background: var(--success-tint);
+        color: #145c3a;
+      }
+      .status.is-error {
+        border-color: #f0b4ae;
+        background: var(--danger-tint);
+        color: #7a1a14;
+      }
+      .status.is-loading {
+        border-color: #f0d4a8;
+        background: var(--warning-tint);
+        color: #6b4a0c;
+      }
+
+      .tool-stack { display: grid; gap: 0.65rem; }
+
+      .tool-panel {
+        display: grid;
+        gap: 0.6rem;
+        padding: 0.85rem;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-lg);
+      }
+
+      .tool-panel h2 {
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        margin: 0;
+        font-size: 0.92rem;
+      }
+
+      .tool-actions {
+        display: grid;
+        gap: 0.45rem;
+        grid-template-columns: 1fr 1fr;
+      }
+
+      .tool-actions .full,
+      .tool-actions button:only-child {
+        grid-column: 1 / -1;
+      }
+
+      .heading-ticks {
+        position: relative;
+        height: 1.5rem;
+        margin: 0 8px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        color: var(--muted);
+        font-family: var(--font-mono);
+      }
+      .heading-ticks span {
+        position: absolute;
+        left: var(--tick);
+        transform: translateX(-50%);
+        white-space: nowrap;
+      }
       .heading-ticks span:first-child { transform: none; }
       .heading-ticks span:last-child { transform: translateX(-100%); }
+
       #heading { appearance: none; width: 100%; height: 16px; background: transparent; margin: 0; }
       #heading::-webkit-slider-runnable-track { height: 6px; background: var(--border); border-radius: 3px; }
       #heading::-moz-range-track { height: 6px; background: var(--border); border-radius: 3px; }
-      #heading::-webkit-slider-thumb { appearance: none; width: 16px; height: 16px; margin-top: -5px; background: var(--gold-dark); border: 0; border-radius: 50%; }
-      #heading::-moz-range-thumb { width: 16px; height: 16px; background: var(--gold-dark); border: 0; border-radius: 50%; }
-      .heading-live { display: inline-block; margin-left: 0.5rem; padding: 0.15rem 0.5rem; border-radius: var(--radius-sm); background: var(--gold-tint); color: var(--gold-dark); font-weight: 700; font-size: 0.85rem; }
-      .readout { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.45rem; }
-      .readout div { background: var(--bg); border-radius: var(--radius-sm); padding: 0.55rem; text-align: center; font-size: 0.78rem; font-weight: 700; color: var(--gold-dark); }
-      .status { min-height: 1.4rem; color: var(--muted); font-size: 0.86rem; }
-      .waypoint-list { min-width: 0; max-width: 100%; max-height: 230px; overflow: auto; padding: 0; margin: 0; list-style: none; font-size: 0.85rem; }
-      .waypoint-list li { border-top: 1px solid var(--border); padding: 0.6rem 0; white-space: nowrap; }
-      .waypoint-list button { min-height: 0; padding: 0.25rem; background: transparent; border: 0; color: var(--gold-dark); text-align: left; font-size: inherit; font-weight: 700; }
-      .calibration-list { display: grid; gap: 0.5rem; padding: 0; margin: 0; list-style: none; }
-      .calibration-item { display: grid; grid-template-columns: 1fr auto; gap: 0.5rem; align-items: center; border-top: 1px solid var(--border); padding-top: 0.55rem; }
+      #heading::-webkit-slider-thumb {
+        appearance: none;
+        width: 16px;
+        height: 16px;
+        margin-top: -5px;
+        background: var(--accent-dark);
+        border: 0;
+        border-radius: 50%;
+      }
+      #heading::-moz-range-thumb {
+        width: 16px;
+        height: 16px;
+        background: var(--accent-dark);
+        border: 0;
+        border-radius: 50%;
+      }
+
+      .heading-live {
+        display: inline-block;
+        margin-left: 0.5rem;
+        padding: 0.15rem 0.5rem;
+        border-radius: var(--radius-sm);
+        background: var(--accent-tint);
+        color: var(--accent-dark);
+        border: 1px solid #f0d4a8;
+        font-weight: 700;
+        font-size: 0.8rem;
+        font-family: var(--font-mono);
+      }
+
+      .waypoint-list,
+      .calibration-list,
+      .annotation-list {
+        min-width: 0;
+        max-width: 100%;
+        max-height: 220px;
+        overflow: auto;
+        padding: 0;
+        margin: 0;
+        list-style: none;
+        font-size: 0.85rem;
+      }
+
+      .waypoint-list li {
+        border-top: 1px solid var(--border);
+        padding: 0.55rem 0;
+        white-space: normal;
+      }
+      .waypoint-list button {
+        min-height: 44px;
+        padding: 0.35rem 0.45rem;
+        background: transparent;
+        border: 0;
+        color: var(--accent-dark);
+        text-align: left;
+        font-size: inherit;
+        font-weight: 700;
+      }
+
+      .calibration-list { display: grid; gap: 0.5rem; }
+      .calibration-item {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 0.5rem;
+        align-items: center;
+        border-top: 1px solid var(--border);
+        padding-top: 0.55rem;
+      }
       .calibration-item small { display: block; color: var(--muted); }
       .calibration-item button { min-height: 0; padding: 0.35rem 0.5rem; font-size: 0.75rem; }
-      .annotation-list { display: grid; gap: 0.5rem; padding: 0; margin: 0; list-style: none; }
+
+      .annotation-list { display: grid; gap: 0.5rem; }
       .annotation-item { border-top: 1px solid var(--border); padding-top: 0.55rem; }
       .annotation-dot { background: var(--danger); }
-      .small { color: var(--muted); font-size: 0.8rem; }
-      .modal { position: fixed; inset: 0; display: none; place-items: center; padding: 1rem; background: rgba(20, 23, 26, 0.78); z-index: 5; }
+      .small { color: var(--muted); font-size: 0.8rem; margin: 0; }
+
+      .modal {
+        position: fixed;
+        inset: 0;
+        display: none;
+        place-items: center;
+        padding: 1rem;
+        background: rgba(20, 23, 26, 0.82);
+        z-index: var(--z-modal);
+      }
       .modal.open { display: grid; }
-      .viewer { width: min(100%, 920px); background: var(--ink); border-radius: var(--radius-md); padding: 0.75rem; }
-      .viewer-head { display: flex; justify-content: space-between; align-items: center; gap: 1rem; color: white; padding-bottom: 0.6rem; font-size: 0.9rem; font-weight: 700; }
+
+      .viewer {
+        width: min(100%, 960px);
+        background: #121518;
+        border-radius: var(--radius-md);
+        padding: 0.75rem;
+        box-shadow: var(--shadow-overlay);
+      }
+      .viewer-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 1rem;
+        color: white;
+        padding-bottom: 0.6rem;
+        font-size: 0.9rem;
+        font-weight: 700;
+      }
       .capture-media { position: relative; }
-      .photo-compass { position: absolute; top: 0.8rem; right: 0.8rem; z-index: 8; display: none; width: 112px; height: 112px; border: 2px solid #d5d9db; border-radius: 50%; background: #202529; box-shadow: 0 2px 8px rgba(0,0,0,0.45); pointer-events: none; }
-      .photo-compass::after { content: ''; position: absolute; left: 50%; top: -3px; width: 10px; height: 10px; background: var(--gold); clip-path: polygon(0 0,100% 0,50% 100%); transform: translateX(-50%); }
+
+      .photo-compass {
+        position: absolute;
+        top: 0.8rem;
+        right: 0.8rem;
+        z-index: 8;
+        display: none;
+        width: 112px;
+        height: 112px;
+        border: 2px solid #d5d9db;
+        border-radius: 50%;
+        background: #202529;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+        pointer-events: none;
+      }
+      .photo-compass::after {
+        content: "";
+        position: absolute;
+        left: 50%;
+        top: -3px;
+        width: 10px;
+        height: 10px;
+        background: var(--accent);
+        clip-path: polygon(0 0, 100% 0, 50% 100%);
+        transform: translateX(-50%);
+      }
       .photo-compass-dial { position: absolute; inset: 0; border-radius: 50%; transform-origin: center; }
-      .photo-compass-dial::before { content: ''; position: absolute; inset: 23px; border: 1px solid #aeb8bd; border-radius: 50%; background: #e4e9e9; }
-      .compass-direction { position: absolute; left: var(--x); top: var(--y); transform: translate(-50%, -50%) rotate(var(--compass-heading, 0deg)); color: #fff; font-size: 12px; font-weight: 700; line-height: 1; }
+      .photo-compass-dial::before {
+        content: "";
+        position: absolute;
+        inset: 23px;
+        border: 1px solid #aeb8bd;
+        border-radius: 50%;
+        background: #e4e9e9;
+      }
+      .compass-direction {
+        position: absolute;
+        left: var(--x);
+        top: var(--y);
+        transform: translate(-50%, -50%) rotate(var(--compass-heading, 0deg));
+        color: #fff;
+        font-size: 12px;
+        font-weight: 700;
+        line-height: 1;
+      }
       .compass-direction.intercardinal { color: #b7c1c6; font-size: 9px; }
-      .photo-compass-rose { position: absolute; inset: 28px; background: #51666b; clip-path: polygon(50% 0,57% 36%,85% 15%,64% 43%,100% 50%,64% 57%,85% 85%,57% 64%,50% 100%,43% 64%,15% 85%,36% 57%,0 50%,36% 43%,15% 15%,43% 36%); }
-      .photo-compass-needle { position: absolute; left: 50%; top: 50%; width: 16px; height: 62px; transform: translate(-50%, -50%); }
-      .photo-compass-needle::before, .photo-compass-needle::after { content: ''; position: absolute; width: 100%; height: 50%; clip-path: polygon(50% 0,100% 100%,0 100%); }
+      .photo-compass-rose {
+        position: absolute;
+        inset: 28px;
+        background: #51666b;
+        clip-path: polygon(50% 0,57% 36%,85% 15%,64% 43%,100% 50%,64% 57%,85% 85%,57% 64%,50% 100%,43% 64%,15% 85%,36% 57%,0 50%,36% 43%,15% 15%,43% 36%);
+      }
+      .photo-compass-needle {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 16px;
+        height: 62px;
+        transform: translate(-50%, -50%);
+      }
+      .photo-compass-needle::before,
+      .photo-compass-needle::after {
+        content: "";
+        position: absolute;
+        width: 100%;
+        height: 50%;
+        clip-path: polygon(50% 0, 100% 100%, 0 100%);
+      }
       .photo-compass-needle::before { top: 0; background: #d94c43; }
       .photo-compass-needle::after { bottom: 0; background: #fff; transform: rotate(180deg); }
-      .photo-compass-hub { position: absolute; left: 50%; top: 50%; width: 10px; height: 10px; border: 1px solid var(--gold); border-radius: 50%; background: #202529; transform: translate(-50%, -50%); }
+      .photo-compass-hub {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 10px;
+        height: 10px;
+        border: 1px solid var(--accent);
+        border-radius: 50%;
+        background: #202529;
+        transform: translate(-50%, -50%);
+      }
+
       #panorama { width: 100%; height: min(65vh, 560px); position: relative; }
-      .preview-action { display: block; margin: 0 auto 1rem; min-height: 44px; padding: 0.7rem 1rem; border: 0; border-radius: var(--radius-sm); background: var(--gold); color: var(--ink); font-weight: 700; cursor: pointer; }
-      .preview-action:hover { background: #ffd257; }
-      #plain-preview { display: none; width: 100%; max-height: 65vh; margin: auto; object-fit: contain; }
-      .nav-arrow { position: absolute; top: 82%; z-index: 6; display: grid; place-items: center; min-width: 0; min-height: 0; width: 48px; height: 48px; padding: 0; border: 0; background: transparent; cursor: pointer; transform: translate(-50%, -50%); }
-      .pnlm-hotspot-base.nav-hotspot { width: 46px; height: 72px; background: transparent; border: 0; cursor: pointer; }
-      .nav-arrow .floor-arrow, .pnlm-hotspot-base.nav-hotspot .floor-arrow { display: block; width: 46px; height: 72px; pointer-events: none; background: var(--gold); clip-path: polygon(50% 0%, 100% 38%, 66% 38%, 66% 100%, 34% 100%, 34% 38%, 0% 38%); transform: perspective(150px) rotateX(64deg); transform-origin: 50% 100%; filter: drop-shadow(0 0 9px rgba(242,182,50,0.85)) drop-shadow(0 3px 4px rgba(0,0,0,0.5)); }
-      .nav-arrow.back .floor-arrow, .pnlm-hotspot-base.nav-hotspot.back .floor-arrow { background: #ffffff; filter: drop-shadow(0 0 9px rgba(255,255,255,0.85)) drop-shadow(0 3px 4px rgba(0,0,0,0.5)); }
-      .viewer-nav { display: flex; justify-content: space-between; gap: 0.5rem; padding-top: 0.6rem; }
+      .preview-action {
+        display: block;
+        margin: 0 auto 1rem;
+        min-height: 44px;
+        padding: 0.7rem 1rem;
+        border: 0;
+        border-radius: var(--radius-sm);
+        background: var(--accent);
+        color: var(--ink);
+        font-weight: 700;
+        cursor: pointer;
+      }
+      .preview-action:hover { background: #eba02e; }
+      #plain-preview {
+        display: none;
+        width: 100%;
+        max-height: 65vh;
+        margin: auto;
+        object-fit: contain;
+      }
+
+      .nav-arrow {
+        position: absolute;
+        top: 82%;
+        z-index: 6;
+        display: grid;
+        place-items: center;
+        min-width: 0;
+        min-height: 0;
+        width: 48px;
+        height: 48px;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        cursor: pointer;
+        transform: translate(-50%, -50%);
+      }
+      .pnlm-hotspot-base.nav-hotspot {
+        width: 46px;
+        height: 72px;
+        background: transparent;
+        border: 0;
+        cursor: pointer;
+      }
+      .nav-arrow .floor-arrow,
+      .pnlm-hotspot-base.nav-hotspot .floor-arrow {
+        display: block;
+        width: 46px;
+        height: 72px;
+        pointer-events: none;
+        background: var(--accent);
+        clip-path: polygon(50% 0%, 100% 38%, 66% 38%, 66% 100%, 34% 100%, 34% 38%, 0% 38%);
+        transform: perspective(150px) rotateX(64deg);
+        transform-origin: 50% 100%;
+        filter: drop-shadow(0 0 9px rgba(224, 137, 26, 0.85)) drop-shadow(0 3px 4px rgba(0, 0, 0, 0.5));
+      }
+      .nav-arrow.back .floor-arrow,
+      .pnlm-hotspot-base.nav-hotspot.back .floor-arrow {
+        background: #ffffff;
+        filter: drop-shadow(0 0 9px rgba(255, 255, 255, 0.85)) drop-shadow(0 3px 4px rgba(0, 0, 0, 0.5));
+      }
+
+      .viewer-nav {
+        display: flex;
+        justify-content: space-between;
+        gap: 0.5rem;
+        padding-top: 0.6rem;
+      }
       .viewer-nav button { min-height: 0; padding: 0.4rem 0.8rem; font-size: 0.8rem; }
       #panorama .pnlm-render-container { overflow: hidden; }
-      @media (max-width: 800px) { .layout { grid-template-columns: 1fr; } .plan-wrap { min-height: 360px; } .plan-stage img { max-height: 56vh; } }
-      @media (max-width: 480px) { .shell { padding: 0.7rem; } .controls { grid-template-columns: 1fr; } .full { grid-column: auto; } }
+
+      @media (max-width: 960px) {
+        .plan-context { grid-template-columns: 1fr 1fr; }
+        .layout { grid-template-columns: 1fr; }
+        .plan-wrap { min-height: 360px; }
+        .plan-stage img { max-height: 56vh; }
+      }
+
+      @media (max-width: 480px) {
+        .shell { padding: 0.65rem 0.7rem 1.2rem; }
+        .plan-context,
+        .tool-actions { grid-template-columns: 1fr; }
+        .plan-context .full { grid-column: auto; }
+      }
     </style>
   </head>
-  <body>
+  <body class="plan-page">
     <a class="skip-link" href="#main">Skip to content</a>
     <main id="main" class="shell">
       <header class="site-header">
@@ -96,10 +527,6 @@
           </div>
         </div>
         <nav class="site-nav" aria-label="Primary">
-          <a class="nav-link" href="login.html">
-            <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-user"></use></svg>
-            Account
-          </a>
           <a class="nav-link secondary" href="map.html">
             <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-camera"></use></svg>
             Capture
@@ -112,89 +539,175 @@
             <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-home"></use></svg>
             Projects
           </a>
+          <a class="nav-link" href="login.html">
+            <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-user"></use></svg>
+            Account
+          </a>
         </nav>
       </header>
-      <p class="small" style="margin: -0.75rem 0 1rem;">Calibrate a drawing, walk a route, and leave capture points for review.</p>
+
+      <section class="plan-context" aria-label="Plan context">
+        <label>Project<select id="project-select"></select></label>
+        <label>Drawing scale
+          <select id="scale-select">
+            <option value="0.125">1/8 in = 1 ft</option>
+            <option value="0.25">1/4 in = 1 ft</option>
+            <option value="0.0625">1/16 in = 1 ft</option>
+            <option value="1">1 in = 1 ft</option>
+          </select>
+        </label>
+        <label>Plan width (feet)<input id="plan-width" type="number" min="1" step="1" value="120" /></label>
+        <label>Position updates
+          <select id="update-mode">
+            <option value="step">On each walk step</option>
+            <option value="interval">Every 5 seconds</option>
+          </select>
+        </label>
+        <label class="full">Upload floor plan (PDF, JPG, or PNG)
+          <input id="floor-plan-file" type="file" accept="application/pdf,image/png,image/jpeg" />
+        </label>
+      </section>
+
       <div class="layout">
-        <section class="panel stack">
-          <div class="controls">
-            <label>Project<select id="project-select"></select></label>
-            <label>Drawing scale<select id="scale-select"><option value="0.125">1/8 in = 1 ft</option><option value="0.25">1/4 in = 1 ft</option><option value="0.0625">1/16 in = 1 ft</option><option value="1">1 in = 1 ft</option></select></label>
-            <label>Plan width (feet)<input id="plan-width" type="number" min="1" step="1" value="120" /></label>
-            <label>Position updates<select id="update-mode"><option value="step">On each walk step</option><option value="interval">Every 5 seconds</option></select></label>
-            <label class="full">Upload floor plan (PDF, JPG, or PNG)<input id="floor-plan-file" type="file" accept="application/pdf,image/png,image/jpeg" /></label>
+        <section class="plan-stage-panel" aria-label="Floor plan stage">
+          <div id="plan-status" class="status" role="status" aria-live="polite">Choose a project and upload a floor plan to begin.</div>
+          <div id="plan-wrap" class="plan-wrap">
+            <div class="plan-empty">Your floor plan will appear here.<br />For clickable waypoints, upload a JPG or PNG export of the plan.</div>
           </div>
-          <div id="plan-status" class="status">Choose a project and upload a floor plan to begin.</div>
-          <div id="plan-wrap" class="plan-wrap"><div class="plan-empty">Your floor plan will appear here.<br />For clickable waypoints, upload a JPG or PNG export of the plan.</div></div>
-          <div class="readout"><div>Route<br /><span id="route-distance">0.0 ft</span></div><div>Waypoints<br /><span id="waypoint-count">0</span></div><div>Heading<br /><span id="heading-value">0° N</span></div></div>
+          <div class="readout">
+            <div>Route<span id="route-distance">0.0 ft</span></div>
+            <div>Waypoints<span id="waypoint-count">0</span></div>
+            <div>Heading<span id="heading-value">0° N</span></div>
+          </div>
         </section>
-        <aside class="stack">
-          <section class="panel stack">
-            <h2>1. Start the route</h2>
-            <p class="small">Click the drawing to set the starting point. Then use the walk controls to move across the plan.</p>
-            <button id="set-gps" class="secondary" type="button">Use current GPS location</button>
-            <button id="enable-sensors" class="quiet" type="button">Enable device heading</button>
-            <label>Heading <span id="heading-live" class="heading-live">0° N</span><input id="heading" type="range" min="0" max="360" value="0" /></label>
-            <div class="heading-ticks"><span style="--tick:0%">0° N</span><span style="--tick:25%">90° E</span><span style="--tick:50%">180° S</span><span style="--tick:75%">270° W</span><span style="--tick:100%">360° N</span></div>
-            <label>Walk distance (feet)<input id="step-distance" type="number" min="0.1" step="0.1" value="1" /></label>
-            <button id="walk-step" type="button" disabled>Walk one step</button>
-            <div id="telemetry-status" class="small">GPS and device sensors are optional. The demo route uses calibrated dead reckoning when they are unavailable.</div>
+
+        <aside class="tool-stack" aria-label="Walkthrough tools">
+          <section class="tool-panel">
+            <h2>
+              <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-compass"></use></svg>
+              Walk route
+            </h2>
+            <p class="small">Click the drawing to set the start. Walk across the plan, then save captures.</p>
+            <div class="tool-actions">
+              <button id="set-gps" class="quiet" type="button">
+                <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-locate"></use></svg>
+                GPS
+              </button>
+              <button id="enable-sensors" class="quiet" type="button">Device heading</button>
+            </div>
+            <label>Heading <span id="heading-live" class="heading-live">0° N</span>
+              <input id="heading" type="range" min="0" max="360" value="0" />
+            </label>
+            <div class="heading-ticks">
+              <span style="--tick:0%">0° N</span>
+              <span style="--tick:25%">90° E</span>
+              <span style="--tick:50%">180° S</span>
+              <span style="--tick:75%">270° W</span>
+              <span style="--tick:100%">360° N</span>
+            </div>
+            <label>Walk distance (feet)
+              <input id="step-distance" type="number" min="0.1" step="0.1" value="1" />
+            </label>
+            <button id="walk-step" class="primary" type="button" disabled>Walk one step</button>
+            <div id="telemetry-status" class="small">GPS and device sensors are optional. Dead reckoning works without them.</div>
           </section>
-          <section class="panel stack">
-            <h2>2. Save a capture</h2>
-            <p class="small">Use an exported JPG or PNG as the preview. Put the original `.insp` or `.insv` file in the native-file field.</p>
-            <label>Preview image (JPG, PNG, or WebP)<input id="photo-file" type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" /></label>
-            <label>Original Insta360 X6 file<input id="native-file" type="file" accept=".insp,.insv,.zip,application/octet-stream,image/*" /></label>
-            <button id="save-waypoint" class="secondary" type="button" disabled>Save waypoint here</button>
+
+          <section class="tool-panel">
+            <h2>
+              <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-camera"></use></svg>
+              Save capture
+            </h2>
+            <p class="small">Preview as JPG/PNG. Keep original `.insp` / `.insv` in the native field.</p>
+            <label>Preview image
+              <input id="photo-file" type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp" />
+            </label>
+            <label>Original Insta360 X6 file
+              <input id="native-file" type="file" accept=".insp,.insv,.zip,application/octet-stream,image/*" />
+            </label>
+            <button id="save-waypoint" class="secondary" type="button" disabled>
+              <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-map-pin"></use></svg>
+              Save waypoint here
+            </button>
           </section>
-          <section class="panel">
-            <h2>Saved waypoints</h2>
+
+          <section class="tool-panel">
+            <h2>
+              <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-map-pin"></use></svg>
+              Saved waypoints
+            </h2>
             <ul id="waypoint-list" class="waypoint-list"><li class="small">No waypoints yet.</li></ul>
           </section>
-          <section class="panel stack" id="edit-panel" style="display:none;">
+
+          <section class="tool-panel" id="edit-panel" style="display:none;">
             <h2>Edit waypoint <span id="edit-waypoint-label"></span></h2>
             <label>Replace photo<input id="edit-photo-file" type="file" accept="image/*" /></label>
-            <button id="apply-edit" class="secondary" type="button">Save changes</button>
-            <button id="cancel-edit" class="quiet" type="button">Cancel</button>
+            <div class="tool-actions">
+              <button id="apply-edit" class="secondary" type="button">Save changes</button>
+              <button id="cancel-edit" class="quiet" type="button">Cancel</button>
+            </div>
           </section>
-          <section class="panel stack">
-            <h2>Calibration review</h2>
-            <p class="small">Auto-placed captures remain editable. Choose a pin, then click its verified location on the drawing.</p>
+
+          <section class="tool-panel">
+            <h2>
+              <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-locate"></use></svg>
+              Calibration
+            </h2>
+            <p class="small">Choose a pin, then click its verified location on the drawing.</p>
             <ul id="calibration-list" class="calibration-list"><li class="small">No auto-placed captures yet.</li></ul>
           </section>
-          <section class="panel stack">
-            <h2>Plan notes</h2>
+
+          <section class="tool-panel">
+            <h2>
+              <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-clipboard"></use></svg>
+              Plan notes
+            </h2>
             <p class="small">Add a note, then click the exact location on the drawing.</p>
             <input id="annotation-body" maxlength="1000" placeholder="What needs attention?" />
             <select id="annotation-pin"><option value="">General plan note</option></select>
-            <button id="add-annotation" class="secondary" type="button">Place note on plan</button>
+            <button id="add-annotation" class="quiet" type="button">Place note on plan</button>
             <ul id="annotation-list" class="annotation-list"><li class="small">No notes yet.</li></ul>
           </section>
         </aside>
       </div>
     </main>
+
     <div id="viewer-modal" class="modal" role="dialog" aria-modal="true" aria-label="360 capture viewer">
-      <div class="viewer"><div class="viewer-head"><span id="viewer-title">Capture</span><button id="close-viewer" class="quiet" type="button">Close</button></div><div id="capture-media" class="capture-media"><div id="panorama"></div><img id="plain-preview" alt="Capture preview" />
-        <div id="photo-compass" class="photo-compass" role="img" aria-label="Compass">
-          <div id="photo-compass-dial" class="photo-compass-dial" aria-hidden="true">
-            <span class="compass-direction" style="--x:50%;--y:12%">N</span>
-            <span class="compass-direction intercardinal" style="--x:77%;--y:23%">NE</span>
-            <span class="compass-direction" style="--x:88%;--y:50%">E</span>
-            <span class="compass-direction intercardinal" style="--x:77%;--y:77%">SE</span>
-            <span class="compass-direction" style="--x:50%;--y:88%">S</span>
-            <span class="compass-direction intercardinal" style="--x:23%;--y:77%">SW</span>
-            <span class="compass-direction" style="--x:12%;--y:50%">W</span>
-            <span class="compass-direction intercardinal" style="--x:23%;--y:23%">NW</span>
-            <span class="photo-compass-rose"></span>
-            <span class="photo-compass-needle"></span>
-            <span class="photo-compass-hub"></span>
+      <div class="viewer">
+        <div class="viewer-head">
+          <span id="viewer-title">Capture</span>
+          <button id="close-viewer" class="quiet" type="button">
+            <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-x"></use></svg>
+            Close
+          </button>
+        </div>
+        <div id="capture-media" class="capture-media">
+          <div id="panorama"></div>
+          <img id="plain-preview" alt="Capture preview" />
+          <div id="photo-compass" class="photo-compass" role="img" aria-label="Compass">
+            <div id="photo-compass-dial" class="photo-compass-dial" aria-hidden="true">
+              <span class="compass-direction" style="--x:50%;--y:12%">N</span>
+              <span class="compass-direction intercardinal" style="--x:77%;--y:23%">NE</span>
+              <span class="compass-direction" style="--x:88%;--y:50%">E</span>
+              <span class="compass-direction intercardinal" style="--x:77%;--y:77%">SE</span>
+              <span class="compass-direction" style="--x:50%;--y:88%">S</span>
+              <span class="compass-direction intercardinal" style="--x:23%;--y:77%">SW</span>
+              <span class="compass-direction" style="--x:12%;--y:50%">W</span>
+              <span class="compass-direction intercardinal" style="--x:23%;--y:23%">NW</span>
+              <span class="photo-compass-rose"></span>
+              <span class="photo-compass-needle"></span>
+              <span class="photo-compass-hub"></span>
+            </div>
           </div>
         </div>
+        <div class="viewer-nav">
+          <button id="prev-capture" class="secondary" type="button">◀ Previous capture</button>
+          <button id="next-capture" class="secondary" type="button">Next capture ▶</button>
+        </div>
       </div>
-      <div class="viewer-nav"><button id="prev-capture" class="secondary" type="button">◀ Previous capture</button><button id="next-capture" class="secondary" type="button">Next capture ▶</button></div></div>
     </div>
+
     <script src="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.js"></script>
     <script src="security.js?v=2"></script>
-    <script src="floorplan.js?v=28"></script>
+    <script src="floorplan.js?v=29"></script>
   </body>
 </html>

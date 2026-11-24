@@ -7,54 +7,273 @@
     <link rel="icon" href="assets/logo.png" type="image/png" />
     <link rel="stylesheet" href="styles.css?v=5" />
     <style>
-      .grid { display: grid; gap: 1rem; }
-      .project-list { display: grid; gap: 0.6rem; }
-      .project-pill { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; padding: 0.7rem 0.8rem; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); }
-      .share-box { margin-top: 0.75rem; padding: 0.75rem; border-radius: var(--radius-md); background: var(--accent-tint); border: 1px solid #f0d4a8; }
-      .status-pill { display: inline-block; padding: 0.3rem 0.55rem; border-radius: var(--radius-sm); background: var(--accent-tint); color: var(--accent-dark); border: 1px solid #f0d4a8; font-size: 0.8rem; margin-bottom: 0.5rem; font-weight: 600; }
-      .pin-card {
+      .review-shell {
+        max-width: 920px;
+      }
+
+      .review-layout {
         display: grid;
-        grid-template-columns: 86px 1fr;
-        gap: 0.7rem;
-        padding: 0.7rem;
+        gap: 1rem;
+        grid-template-columns: minmax(260px, 0.9fr) minmax(0, 1.25fr);
+        align-items: start;
+      }
+
+      .review-panel {
+        display: grid;
+        gap: 0.75rem;
+        padding: 1rem;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-lg);
+      }
+
+      .review-panel h2 {
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        margin: 0;
+        font-size: 1rem;
+      }
+
+      .review-status {
+        min-height: 1.25rem;
+        margin: 0 0 0.85rem;
+        padding: 0.55rem 0.7rem;
+        border-radius: var(--radius-md);
+        border: 1px solid transparent;
+        font-size: 0.875rem;
+        color: var(--muted);
+      }
+
+      .review-status:empty { display: none; }
+      .review-status.is-loading {
+        border-color: var(--border);
+        background: var(--bg-elevated);
+        color: var(--ink-soft);
+      }
+      .review-status.is-success {
+        border-color: #a7d9bf;
+        background: var(--success-tint);
+        color: #145c3a;
+      }
+      .review-status.is-error {
+        border-color: #f0b4ae;
+        background: var(--danger-tint);
+        color: #7a1a14;
+      }
+
+      .create-stack {
+        display: grid;
+        gap: 0.55rem;
+      }
+
+      .action-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.45rem;
+      }
+
+      .action-row button {
+        flex: 1 1 auto;
+      }
+
+      .project-list {
+        display: grid;
+        gap: 0.5rem;
+        max-height: 280px;
+        overflow: auto;
+      }
+
+      .project-pill {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.6rem;
+        padding: 0.7rem 0.75rem;
         border: 1px solid var(--border);
         border-radius: var(--radius-md);
         background: var(--bg-elevated);
       }
+
+      .project-pill.is-active {
+        border-color: var(--accent-dark);
+        box-shadow: inset 0 0 0 1px var(--accent);
+        background: var(--accent-tint);
+      }
+
+      .project-pill button {
+        min-height: 44px;
+        padding: 0.45rem 0.75rem;
+        font-size: 0.8rem;
+      }
+
+      .summary-head {
+        display: grid;
+        gap: 0.35rem;
+      }
+
+      .status-pill {
+        display: inline-flex;
+        align-items: center;
+        width: fit-content;
+        padding: 0.25rem 0.5rem;
+        border-radius: var(--radius-sm);
+        background: var(--accent-tint);
+        color: var(--accent-dark);
+        border: 1px solid #f0d4a8;
+        font-size: 0.75rem;
+        margin-bottom: 0.35rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+      }
+
+      .share-box {
+        margin-top: 0.25rem;
+        padding: 0.75rem;
+        border-radius: var(--radius-md);
+        background: var(--accent-tint);
+        border: 1px solid #f0d4a8;
+      }
+
+      .share-box a {
+        color: var(--ink);
+        font-weight: 600;
+        word-break: break-all;
+        text-decoration: underline;
+        text-underline-offset: 2px;
+      }
+
+      .pins-panel {
+        margin-top: 0;
+        grid-column: 1 / -1;
+      }
+
+      #review-pins {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        gap: 0.6rem;
+      }
+
+      #review-pins > li {
+        margin: 0;
+      }
+
+      .pin-card {
+        display: grid;
+        grid-template-columns: 88px minmax(0, 1fr);
+        gap: 0.75rem;
+        padding: 0.75rem;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        background: var(--bg-elevated);
+      }
+
       .mini-map {
         position: relative;
-        width: 72px;
-        height: 72px;
+        width: 88px;
+        height: 88px;
         border-radius: var(--radius-md);
-        background: var(--surface-muted);
+        background:
+          linear-gradient(rgba(26, 29, 33, 0.06) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(26, 29, 33, 0.06) 1px, transparent 1px),
+          var(--surface-muted);
+        background-size: 12px 12px, 12px 12px, 100% 100%;
         border: 1px solid var(--border);
         overflow: hidden;
       }
+
       .mini-map::before {
         content: "";
         position: absolute;
-        width: 52px;
+        width: 54px;
         height: 2px;
         background: var(--accent-dark);
-        left: 10px;
-        top: 34px;
+        left: 17px;
+        top: 43px;
         transform-origin: center;
         transform: rotate(var(--heading, 0deg));
       }
+
       .mini-map::after {
         content: "";
         position: absolute;
-        width: 10px;
-        height: 10px;
+        width: 12px;
+        height: 12px;
         background: var(--ink);
+        border: 2px solid #fff;
         border-radius: 50%;
-        left: 31px;
-        top: 30px;
+        left: 36px;
+        top: 36px;
+        box-shadow: 0 1px 4px rgba(26, 29, 33, 0.25);
       }
-      .stack { display: grid; gap: 0.5rem; }
-      code { background: var(--bg); padding: 0.2rem 0.4rem; border-radius: 4px; }
-      ul { padding-left: 0; list-style: none; margin: 0; }
-      li { margin-bottom: 0.6rem; }
+
+      .pin-body {
+        min-width: 0;
+        display: grid;
+        gap: 0.2rem;
+      }
+
+      .pin-body strong {
+        font-size: 0.95rem;
+      }
+
+      .pin-meta {
+        font-size: 0.82rem;
+        color: var(--ink-soft);
+      }
+
+      .pin-meta .coord {
+        color: var(--muted);
+      }
+
+      .pin-tags {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.3rem;
+        margin-top: 0.25rem;
+      }
+
+      code {
+        background: var(--bg-elevated);
+        padding: 0.15rem 0.35rem;
+        border-radius: 4px;
+        font-family: var(--font-mono);
+        font-size: 0.78rem;
+      }
+
+      .checklist {
+        margin-top: 0.35rem;
+      }
+
+      @media (max-width: 800px) {
+        .review-layout {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 420px) {
+        .pin-card {
+          grid-template-columns: 1fr;
+        }
+
+        .mini-map {
+          width: 100%;
+          height: 72px;
+        }
+
+        .mini-map::before {
+          left: calc(50% - 27px);
+          top: 35px;
+        }
+
+        .mini-map::after {
+          left: calc(50% - 6px);
+          top: 28px;
+        }
+      }
     </style>
   </head>
   <body>
@@ -69,71 +288,102 @@
           </div>
         </div>
         <nav class="site-nav" aria-label="Primary">
-          <a class="nav-link" href="login.html">
-            <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-user"></use></svg>
-            Account
+          <a class="nav-link" href="map.html">
+            <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-camera"></use></svg>
+            Capture
           </a>
           <a class="nav-link" href="floorplan.html">
             <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-layout"></use></svg>
             Floor plan
           </a>
-          <a class="nav-link" href="map.html">
-            <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-camera"></use></svg>
-            Capture
-          </a>
           <a class="nav-link" href="index.html">
             <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-home"></use></svg>
             Projects
           </a>
+          <a class="nav-link" href="login.html">
+            <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-user"></use></svg>
+            Account
+          </a>
         </nav>
       </header>
-      <main id="main" class="card">
-      <p>Review captured pins, set project status, and share with stakeholders.</p>
-      <div class="grid">
-        <div class="panel">
-          <h2>Create or open a project</h2>
-          <input id="review-title" placeholder="Project title" />
-          <input id="review-description" placeholder="Description" style="margin-top:0.6rem;" />
-          <button id="create-review-project" class="primary" style="margin-top:0.8rem;">Create project</button>
-          <label for="share-expiration" style="display:block; margin-top:0.8rem;">Share link expires in</label>
-          <select id="share-expiration" style="margin-top:0.3rem;">
-            <option value="1">1 day</option>
-            <option value="7" selected>7 days</option>
-            <option value="14">14 days</option>
-            <option value="30">30 days</option>
-          </select>
-          <button id="create-share-link" class="secondary" style="margin-top:0.8rem;">Create share link</button>
-          <button id="copy-share-link" class="secondary" style="margin-top:0.8rem; display:none;">Copy share link</button>
-          <button id="revoke-share-link" class="quiet" style="margin-top:0.8rem; display:none;">Revoke share link</button>
-          <button id="mark-ready" class="quiet" style="margin-top:0.8rem;">Mark ready for review</button>
-          <div class="panel" style="margin-top:1rem; padding: 0.8rem;">
-            <div class="muted">Existing projects</div>
-            <div id="project-list" class="project-list" style="margin-top:0.6rem;"></div>
-          </div>
+
+      <main id="main">
+        <p id="review-status" class="review-status" role="status" aria-live="polite"></p>
+
+        <div class="review-layout">
+          <section class="review-panel" aria-labelledby="review-open-heading">
+            <h2 id="review-open-heading">
+              <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-layers"></use></svg>
+              Open project
+            </h2>
+
+            <div class="create-stack">
+              <label>Project title
+                <input id="review-title" placeholder="Project title" maxlength="255" />
+              </label>
+              <label>Description
+                <input id="review-description" placeholder="Description" maxlength="1000" />
+              </label>
+              <button id="create-review-project" class="primary" type="button">Create project</button>
+            </div>
+
+            <div class="create-stack">
+              <label for="share-expiration">Share link expires in</label>
+              <select id="share-expiration">
+                <option value="1">1 day</option>
+                <option value="7" selected>7 days</option>
+                <option value="14">14 days</option>
+                <option value="30">30 days</option>
+              </select>
+              <div class="action-row">
+                <button id="create-share-link" class="secondary" type="button">
+                  <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-link"></use></svg>
+                  Create share link
+                </button>
+                <button id="copy-share-link" class="quiet" type="button" style="display:none;">Copy link</button>
+                <button id="revoke-share-link" class="quiet" type="button" style="display:none;">Revoke</button>
+              </div>
+              <button id="mark-ready" class="quiet" type="button">Mark ready for review</button>
+            </div>
+
+            <div>
+              <div class="muted" style="font-size:0.8rem; font-weight:600; margin-bottom:0.45rem;">Existing projects</div>
+              <div id="project-list" class="project-list"></div>
+            </div>
+          </section>
+
+          <section class="review-panel" aria-labelledby="review-summary-heading">
+            <h2 id="review-summary-heading">
+              <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-clipboard"></use></svg>
+              Summary
+            </h2>
+            <div id="review-summary" class="summary-head">No project selected.</div>
+            <ul id="onboarding-checklist" class="checklist">
+              <li class="pending">● Project created and titled</li>
+              <li class="pending">● Technician confirmed location + heading</li>
+              <li class="pending">● Native 360 file preserved when needed</li>
+              <li class="pending">● Share link generated for review</li>
+            </ul>
+            <div id="share-box" class="share-box" style="display:none;">
+              <div class="muted">Share this review</div>
+              <div id="share-link-text"></div>
+              <div id="share-expiry-text" class="muted" style="margin-top:0.5rem;"></div>
+            </div>
+          </section>
+
+          <section class="review-panel pins-panel" aria-labelledby="review-pins-heading">
+            <h2 id="review-pins-heading">
+              <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-map-pin"></use></svg>
+              Captured pins
+            </h2>
+            <ul id="review-pins"></ul>
+          </section>
         </div>
-        <div class="panel">
-          <h2>Project summary</h2>
-          <div id="review-summary">No project selected.</div>
-          <ul id="onboarding-checklist" class="checklist">
-            <li class="pending">● Project created and titled</li>
-            <li class="pending">● Technician confirmed location + heading</li>
-            <li class="pending">● Native 360 file preserved when needed</li>
-            <li class="pending">● Share link generated for review</li>
-          </ul>
-          <div id="share-box" class="share-box" style="display:none;">
-            <div class="muted">Share this review</div>
-            <div id="share-link-text" style="word-break: break-all;"></div>
-            <div id="share-expiry-text" class="muted" style="margin-top:0.5rem;"></div>
-          </div>
-        </div>
-      </div>
-      <div class="panel" style="margin-top:1rem;">
-        <h2>Captured pins</h2>
-        <ul id="review-pins"></ul>
-      </div>
       </main>
+
+      <footer class="site-footer"><a href="privacy.html">Privacy</a> · <a href="terms.html">Terms</a></footer>
     </div>
     <script src="security.js?v=2"></script>
-    <script src="review.js?v=6"></script>
+    <script src="review.js?v=7"></script>
   </body>
 </html>
