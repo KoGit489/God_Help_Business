@@ -228,7 +228,7 @@ def test_browser_frontend_and_cors_are_available() -> None:
 
     index_response = client.get("/index.html")
     assert index_response.status_code == 200
-    assert "CASAI MVP" in index_response.text
+    assert "<title>CASAI Projects</title>" in index_response.text
 
     preflight = client.options(
         "/projects",
@@ -298,7 +298,7 @@ def test_floor_plan_upload_and_pin_position_are_available() -> None:
 
     floorplan_page = client.get("/floorplan.html")
     assert floorplan_page.status_code == 200
-    assert "Floor plan walkthrough" in floorplan_page.text
+    assert "<title>CASAI Floor Plan Walkthrough</title>" in floorplan_page.text
 
     pin = client.post(
         f"/projects/{project['id']}/pins",

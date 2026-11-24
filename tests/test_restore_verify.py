@@ -1,5 +1,6 @@
 import io
 import json
+from datetime import datetime, timezone
 
 import pytest
 from sqlalchemy import create_engine, text
@@ -22,7 +23,7 @@ def test_restore_inventory_checks_all_referenced_media_and_row_counts() -> None:
     Base.metadata.create_all(engine)
     with engine.begin() as connection:
         connection.execute(text("INSERT INTO projects (id, owner_id, title, status, floor_plan_json) VALUES ('p', 'u', 'Site', 'draft', :plan)"), {"plan": json.dumps({"media_key": "floorplans/p/map.png"})})
-        connection.execute(text("INSERT INTO pins (id, project_id, latitude, longitude, heading, captured_on, alignment_confidence, processing_status, photo_key) VALUES ('pin', 'p', 0, 0, 0, '2026-01-01', 0, 'ready', 'uploads/p/pin/photo.jpg')"))
+        connection.execute(text("INSERT INTO pins (id, project_id, latitude, longitude, heading, captured_on, alignment_confidence, processing_status, photo_key, created_at, route_order) VALUES ('pin', 'p', 0, 0, 0, '2026-01-01', 0, 'ready', 'uploads/p/pin/photo.jpg', :created_at, 1)"), {"created_at": datetime.now(timezone.utc)})
     storage = FakeStorage({"floorplans/p/map.png": b"plan", "uploads/p/pin/photo.jpg": b"photo"})
     with engine.connect() as connection:
         expected = capture_inventory(connection, storage, "source")

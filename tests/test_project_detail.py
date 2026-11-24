@@ -161,6 +161,97 @@ def test_database_workflows_preserve_capture_review_and_sharing(monkeypatch, tmp
         engine.dispose()
 
 
+def test_database_pins_keep_creation_route_order_after_updates(monkeypatch, tmp_path) -> None:
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from app import main as api
+
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'pin-order.sqlite'}",
+        connect_args={"check_same_thread": False},
+    )
+    api.Base.metadata.create_all(engine)
+    monkeypatch.setattr(api, "PERSISTENCE_MODE", "database")
+    monkeypatch.setattr(api, "STORAGE_BACKEND", "local")
+    monkeypatch.setattr(api, "UPLOAD_DIR", tmp_path / "media")
+    monkeypatch.setattr(api, "SEED_DEMO_DATA", False)
+    monkeypatch.setattr(api, "engine", engine)
+    monkeypatch.setattr(api, "SessionLocal", sessionmaker(bind=engine))
+
+    headers = {"x-user-id": "demo"}
+    try:
+        with TestClient(app) as database_client:
+            project = database_client.post("/projects", headers=headers, json={"title": "Route order"}).json()
+            project_route = f"/projects/{project['id']}"
+            pin_ids = []
+            for heading in (10, 20, 30):
+                pin = database_client.post(
+                    f"{project_route}/pins",
+                    headers=headers,
+                    json={"latitude": 5.5, "longitude": -0.2, "heading": heading, "captured_on": "2026-11-01"},
+                ).json()
+                pin_ids.append(pin["id"])
+
+            updated = database_client.patch(
+                f"{project_route}/pins/{pin_ids[0]}",
+                headers=headers,
+                json={"heading": 180},
+            )
+            assert updated.status_code == 200
+
+            detail = database_client.get(f"{project_route}/review", headers=headers).json()
+            listed = database_client.get(f"{project_route}/pins", headers=headers).json()
+            assert [pin["id"] for pin in detail["pins"]] == pin_ids
+            assert [pin["id"] for pin in listed] == pin_ids
+            assert [pin["route_order"] for pin in listed] == [1, 2, 3]
+    finally:
+        engine.dispose()
+
+
+def test_existing_pin_table_gets_creation_and_route_columns(monkeypatch, tmp_path) -> None:
+    from sqlalchemy import create_engine, inspect, text
+
+    from app import main as api
+
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'legacy-pins.sqlite'}",
+        connect_args={"check_same_thread": False},
+    )
+    with engine.begin() as connection:
+        connection.execute(text(
+            "CREATE TABLE pins (id VARCHAR(64) PRIMARY KEY, project_id VARCHAR(64) NOT NULL, "
+            "latitude FLOAT NOT NULL, longitude FLOAT NOT NULL, heading FLOAT NOT NULL, "
+            "captured_on VARCHAR(64) NOT NULL)"
+        ))
+        connection.execute(text(
+            "INSERT INTO pins (id, project_id, latitude, longitude, heading, captured_on) "
+            "VALUES ('pin-b', 'project-1', 1, 2, 20, '2026-11-01'), "
+            "('pin-a', 'project-1', 3, 4, 10, '2026-11-01')"
+        ))
+
+    monkeypatch.setattr(api, "engine", engine)
+    api._migrate_pin_ordering()
+
+    columns = {column["name"] for column in inspect(engine).get_columns("pins")}
+    assert {"created_at", "route_order"}.issubset(columns)
+    with engine.connect() as connection:
+        rows = connection.execute(text(
+            "SELECT id, route_order FROM pins WHERE project_id = 'project-1' ORDER BY route_order"
+        )).all()
+    assert [row.id for row in rows] == ["pin-a", "pin-b"]
+
+    with engine.begin() as connection:
+        connection.execute(text("UPDATE pins SET route_order = 7 WHERE id = 'pin-a'"))
+        connection.execute(text("UPDATE pins SET route_order = 0 WHERE id = 'pin-b'"))
+    api._migrate_pin_ordering()
+    with engine.connect() as connection:
+        routes = dict(connection.execute(text("SELECT id, route_order FROM pins")).all())
+    assert routes["pin-a"] == 7
+    assert routes["pin-b"] == 8
+    engine.dispose()
+
+
 def test_existing_project_table_gets_floor_plan_column(monkeypatch, tmp_path) -> None:
     from sqlalchemy import create_engine, inspect, text
     from sqlalchemy.orm import sessionmaker
