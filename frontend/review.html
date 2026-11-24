@@ -5,14 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>CASAI Project Review</title>
     <link rel="icon" href="assets/logo.png" type="image/png" />
-    <link rel="stylesheet" href="styles.css?v=3" />
+    <link rel="stylesheet" href="styles.css?v=5" />
     <style>
-      .app-shell { max-width: 620px; }
       .grid { display: grid; gap: 1rem; }
       .project-list { display: grid; gap: 0.6rem; }
       .project-pill { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; padding: 0.7rem 0.8rem; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); }
-      .share-box { margin-top: 0.75rem; padding: 0.75rem; border-radius: var(--radius-md); background: var(--gold-tint); border: 1px solid var(--gold); }
-      .status-pill { display: inline-block; padding: 0.35rem 0.6rem; border-radius: 999px; background: var(--gold-tint); color: var(--gold-dark); font-size: 0.9rem; margin-bottom: 0.5rem; font-weight: 700; }
+      .share-box { margin-top: 0.75rem; padding: 0.75rem; border-radius: var(--radius-md); background: var(--accent-tint); border: 1px solid #f0d4a8; }
+      .status-pill { display: inline-block; padding: 0.3rem 0.55rem; border-radius: var(--radius-sm); background: var(--accent-tint); color: var(--accent-dark); border: 1px solid #f0d4a8; font-size: 0.8rem; margin-bottom: 0.5rem; font-weight: 600; }
       .pin-card {
         display: grid;
         grid-template-columns: 86px 1fr;
@@ -20,14 +19,14 @@
         padding: 0.7rem;
         border: 1px solid var(--border);
         border-radius: var(--radius-md);
-        background: var(--bg);
+        background: var(--bg-elevated);
       }
       .mini-map {
         position: relative;
         width: 72px;
         height: 72px;
         border-radius: var(--radius-md);
-        background: linear-gradient(135deg, var(--gold-tint), var(--bg));
+        background: var(--surface-muted);
         border: 1px solid var(--border);
         overflow: hidden;
       }
@@ -36,7 +35,7 @@
         position: absolute;
         width: 52px;
         height: 2px;
-        background: var(--gold-dark);
+        background: var(--accent-dark);
         left: 10px;
         top: 34px;
         transform-origin: center;
@@ -59,23 +58,37 @@
     </style>
   </head>
   <body>
-    <div class="app-shell">
+    <a class="skip-link" href="#main">Skip to content</a>
+    <div class="app-shell review-shell">
       <header class="site-header">
         <div class="brand">
           <img class="brand-logo" src="assets/logo.png" alt="CASAI logo" />
           <div class="brand-text">
-            <span class="eyebrow">CASAI / Draft 1</span>
+            <span class="eyebrow">CASAI</span>
             <h1>Project review</h1>
           </div>
         </div>
-        <nav class="site-nav">
-          <a href="login.html"><button class="quiet" type="button">Account</button></a>
-          <a href="floorplan.html"><button class="secondary" type="button">Floor plan walkthrough</button></a>
-          <a href="index.html"><button class="quiet" type="button">Back to dashboard</button></a>
+        <nav class="site-nav" aria-label="Primary">
+          <a class="nav-link" href="login.html">
+            <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-user"></use></svg>
+            Account
+          </a>
+          <a class="nav-link" href="floorplan.html">
+            <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-layout"></use></svg>
+            Floor plan
+          </a>
+          <a class="nav-link" href="map.html">
+            <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-camera"></use></svg>
+            Capture
+          </a>
+          <a class="nav-link" href="index.html">
+            <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-home"></use></svg>
+            Projects
+          </a>
         </nav>
       </header>
-      <div class="card">
-      <p>This page gives the project a clearer review view so captured pins can be reviewed, shared, and presented more clearly.</p>
+      <main id="main" class="card">
+      <p>Review captured pins, set project status, and share with stakeholders.</p>
       <div class="grid">
         <div class="panel">
           <h2>Create or open a project</h2>
@@ -118,6 +131,7 @@
         <h2>Captured pins</h2>
         <ul id="review-pins"></ul>
       </div>
+      </main>
     </div>
     <script src="security.js?v=2"></script>
     <script src="review.js?v=6"></script>

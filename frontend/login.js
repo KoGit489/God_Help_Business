@@ -23,7 +23,26 @@ const params = new URLSearchParams(window.location.search);
 const requestedNext = params.get('next') || 'index.html';
 const nextPath = safeLocalRedirect(requestedNext);
 
-function setStatus(message) { status.textContent = message; }
+function setStatus(message, kind = '') {
+  status.textContent = message;
+  status.className = kind ? `auth-status is-${kind}` : 'auth-status';
+}
+
+function setSignedInView(isSignedIn) {
+  const heading = document.getElementById('auth-heading');
+  const heroCopy = heading?.nextElementSibling;
+  if (heading) heading.textContent = isSignedIn ? 'Account' : 'Sign in';
+  if (heroCopy) heroCopy.textContent = isSignedIn
+    ? 'Manage sign-in, two-step verification, and account access.'
+    : 'Field capture access for your projects.';
+}
+
+function revealLoginMfaIfNeeded(message) {
+  if (!/mfa|authenticator|two-step|recovery code|one-time/i.test(message || '')) return;
+  const details = document.querySelector('#login-form details.mfa-reveal');
+  if (details) details.open = true;
+  document.getElementById('login-mfa-code')?.focus();
+}
 
 async function apiRequest(path, options = {}) {
   let lastError = null;
@@ -50,17 +69,19 @@ async function loadCurrentUser() {
     const user = await apiRequest('/auth/me');
     loginForm.hidden = true;
     accountPanel.hidden = false;
+    setSignedInView(true);
     document.getElementById('account-name').textContent = user.name;
     document.getElementById('account-email').textContent = user.email;
     document.getElementById('account-verification').textContent = user.email_verified ? 'Email verified or grandfathered.' : 'Email not yet verified.';
     document.getElementById('account-verify-link').hidden = user.email_verified;
     createUserForm.hidden = !user.is_admin;
-    setStatus(user.is_admin ? 'Signed in as administrator.' : 'Signed in.');
+    setStatus(user.is_admin ? 'Signed in as administrator.' : 'Signed in.', 'success');
     await loadMfaStatus();
   } catch (error) {
     loginForm.hidden = false;
     accountPanel.hidden = true;
-    if (!/sign in|session|401/i.test(error.message)) setStatus(`Unable to load account: ${error.message}`);
+    setSignedInView(false);
+    if (!/sign in|session|401/i.test(error.message)) setStatus(`Unable to load account: ${error.message}`, 'error');
   }
 }
 
@@ -84,7 +105,7 @@ loginForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   const submitButton = loginForm.querySelector('button[type="submit"]');
   submitButton.disabled = true;
-  setStatus('Signing in...');
+  setStatus('Signing in...', 'loading');
   try {
     await apiRequest('/auth/login', {
       method: 'POST',
@@ -96,15 +117,18 @@ loginForm.addEventListener('submit', async (event) => {
       }),
     });
     window.location.assign(nextPath);
-  } catch (error) { setStatus(`Sign-in failed: ${error.message}`); }
-  finally { submitButton.disabled = false; }
+  } catch (error) {
+    setStatus(`Sign-in failed: ${error.message}`, 'error');
+    revealLoginMfaIfNeeded(error.message);
+  } finally { submitButton.disabled = false; }
 });
 
 document.getElementById('logout-button').addEventListener('click', async () => {
   try { await apiRequest('/auth/logout', { method: 'POST' }); }
-  catch (error) { setStatus(`Sign-out failed: ${error.message}`); return; }
+  catch (error) { setStatus(`Sign-out failed: ${error.message}`, 'error'); return; }
   loginForm.hidden = false;
   accountPanel.hidden = true;
+  setSignedInView(false);
   deleteAccountForm.hidden = true;
   deleteAccountForm.reset();
   mfaSetupForm.reset();
@@ -115,14 +139,14 @@ document.getElementById('logout-button').addEventListener('click', async () => {
   document.getElementById('mfa-recovery-codes').value = '';
   document.getElementById('mfa-recovery-panel').hidden = true;
   loginForm.reset();
-  setStatus('Signed out.');
+  setStatus('Signed out.', 'success');
 });
 
 createUserForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   const submitButton = createUserForm.querySelector('button[type="submit"]');
   submitButton.disabled = true;
-  setStatus('Creating account...');
+  setStatus('Creating account...', 'loading');
   try {
     const user = await apiRequest('/auth/users', {
       method: 'POST',
@@ -135,8 +159,8 @@ createUserForm.addEventListener('submit', async (event) => {
       }),
     });
     createUserForm.reset();
-    setStatus(`Account created for ${user.email}. Email verification is not yet complete.`);
-  } catch (error) { setStatus(`Account creation failed: ${error.message}`); }
+    setStatus(`Account created for ${user.email}. Email verification is not yet complete.`, 'success');
+  } catch (error) { setStatus(`Account creation failed: ${error.message}`, 'error'); }
   finally { submitButton.disabled = false; }
 });
 
@@ -155,7 +179,7 @@ deleteAccountForm.addEventListener('submit', async (event) => {
   if (!window.confirm('Delete your account and sign out of all sessions? This cannot be undone.')) return;
   const submitButton = deleteAccountForm.querySelector('button[type="submit"]');
   submitButton.disabled = true;
-  setStatus('Deleting account...');
+  setStatus('Deleting account...', 'loading');
   try {
     await apiRequest('/auth/me', {
       method: 'DELETE',
@@ -165,7 +189,7 @@ deleteAccountForm.addEventListener('submit', async (event) => {
     deleteAccountForm.reset();
     window.location.assign('/login.html');
   } catch (error) {
-    setStatus(`Account deletion failed: ${error.message}`);
+    setStatus(`Account deletion failed: ${error.message}`, 'error');
   } finally {
     submitButton.disabled = false;
   }
@@ -175,7 +199,7 @@ mfaSetupForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   const button = mfaSetupForm.querySelector('button[type="submit"]');
   button.disabled = true;
-  setStatus('Preparing authenticator...');
+  setStatus('Preparing authenticator...', 'loading');
   try {
     const result = await apiRequest('/auth/mfa/setup', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -185,8 +209,8 @@ mfaSetupForm.addEventListener('submit', async (event) => {
     mfaSetupForm.hidden = true;
     document.getElementById('mfa-secret').textContent = result.secret;
     document.getElementById('mfa-secret-panel').hidden = false;
-    setStatus('Enter the current code from your authenticator.');
-  } catch (error) { setStatus(`Authenticator setup failed: ${error.message}`); }
+    setStatus('Enter the current code from your authenticator.', 'success');
+  } catch (error) { setStatus(`Authenticator setup failed: ${error.message}`, 'error'); }
   finally { button.disabled = false; }
 });
 
@@ -194,7 +218,7 @@ mfaEnableForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   const button = mfaEnableForm.querySelector('button[type="submit"]');
   button.disabled = true;
-  setStatus('Enabling two-step sign-in...');
+  setStatus('Enabling two-step sign-in...', 'loading');
   try {
     const result = await apiRequest('/auth/mfa/enable', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -206,16 +230,16 @@ mfaEnableForm.addEventListener('submit', async (event) => {
     document.getElementById('mfa-recovery-codes').value = result.recovery_codes.join('\n');
     document.getElementById('mfa-recovery-panel').hidden = false;
     await loadMfaStatus();
-    setStatus('Two-step sign-in is enabled. Save your recovery codes now.');
-  } catch (error) { setStatus(`Unable to enable two-step sign-in: ${error.message}`); }
+    setStatus('Two-step sign-in is enabled. Save your recovery codes now.', 'success');
+  } catch (error) { setStatus(`Unable to enable two-step sign-in: ${error.message}`, 'error'); }
   finally { button.disabled = false; }
 });
 
 document.getElementById('mfa-copy-recovery').addEventListener('click', async () => {
   try {
     await navigator.clipboard.writeText(document.getElementById('mfa-recovery-codes').value);
-    setStatus('Recovery codes copied. Store them securely.');
-  } catch { setStatus('Copy failed. Select and copy the recovery codes.'); }
+    setStatus('Recovery codes copied. Store them securely.', 'success');
+  } catch { setStatus('Copy failed. Select and copy the recovery codes.', 'error'); }
 });
 
 document.getElementById('mfa-recovery-done').addEventListener('click', () => {
@@ -229,7 +253,7 @@ mfaDisableForm.addEventListener('submit', async (event) => {
   if (!window.confirm('Turn off two-step sign-in for this account?')) return;
   const button = mfaDisableForm.querySelector('button[type="submit"]');
   button.disabled = true;
-  setStatus('Turning off two-step sign-in...');
+  setStatus('Turning off two-step sign-in...', 'loading');
   try {
     await apiRequest('/auth/mfa/disable', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -237,8 +261,8 @@ mfaDisableForm.addEventListener('submit', async (event) => {
     });
     mfaDisableForm.reset();
     await loadMfaStatus();
-    setStatus('Two-step sign-in is off.');
-  } catch (error) { setStatus(`Unable to turn off two-step sign-in: ${error.message}`); }
+    setStatus('Two-step sign-in is off.', 'success');
+  } catch (error) { setStatus(`Unable to turn off two-step sign-in: ${error.message}`, 'error'); }
   finally { button.disabled = false; }
 });
 

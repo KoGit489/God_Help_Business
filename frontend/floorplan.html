@@ -6,7 +6,7 @@
     <title>CASAI Floor Plan Walkthrough</title>
     <link rel="icon" href="assets/logo.png" type="image/png" />
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.css" />
-    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="styles.css?v=5" />
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <style>
       .shell { max-width: 1240px; margin: 0 auto; padding: 1.2rem; }
@@ -25,6 +25,7 @@
       .waypoint { position: absolute; width: 12px; height: 12px; min-width: 0; min-height: 0; padding: 0; transform: translate(-50%, -50%); border: 0; border-radius: 50%; background: var(--gold-dark); box-shadow: 0 0 0 1.5px #fff; cursor: pointer; z-index: 3; pointer-events: auto; }
       .waypoint::before { content: ""; position: absolute; inset: -12px; border-radius: 50%; }
       .waypoint.current { width: 8px; height: 8px; background: var(--ink); animation: pulse 1.5s infinite; }
+      @media (prefers-reduced-motion: reduce) { .waypoint.current { animation: none; } }
       .waypoint::after { content: attr(data-label); position: absolute; left: 10px; top: 6px; white-space: nowrap; color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 0.2rem 0.35rem; font-size: 0.72rem; font-weight: 700; }
       @keyframes pulse { 50% { box-shadow: 0 0 0 4px rgba(20, 23, 26, 0.18); } }
       .heading-ticks { position: relative; height: 1.5rem; margin: 0 8px; font-size: 0.72rem; font-weight: 700; color: var(--muted); }
@@ -84,23 +85,36 @@
     </style>
   </head>
   <body>
-    <main class="shell">
+    <a class="skip-link" href="#main">Skip to content</a>
+    <main id="main" class="shell">
       <header class="site-header">
         <div class="brand">
           <img class="brand-logo" src="assets/logo.png" alt="CASAI logo" />
           <div class="brand-text">
-            <span class="eyebrow">CASAI / Draft 1</span>
-            <h1>Floor plan walkthrough</h1>
+            <span class="eyebrow">CASAI</span>
+            <h1>Floor plan</h1>
           </div>
         </div>
-        <nav class="site-nav">
-          <a href="login.html"><button class="quiet" type="button">Account</button></a>
-          <a href="map.html"><button class="secondary" type="button">Capture view</button></a>
-          <a href="review.html"><button class="secondary" type="button">Review view</button></a>
-          <a href="index.html"><button class="quiet" type="button">Back to dashboard</button></a>
+        <nav class="site-nav" aria-label="Primary">
+          <a class="nav-link" href="login.html">
+            <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-user"></use></svg>
+            Account
+          </a>
+          <a class="nav-link secondary" href="map.html">
+            <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-camera"></use></svg>
+            Capture
+          </a>
+          <a class="nav-link" href="review.html">
+            <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-clipboard"></use></svg>
+            Review
+          </a>
+          <a class="nav-link" href="index.html">
+            <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-home"></use></svg>
+            Projects
+          </a>
         </nav>
       </header>
-      <p class="small" style="margin: -0.75rem 0 1rem;">Calibrate a drawing, walk a route, and leave clickable capture points for remote review.</p>
+      <p class="small" style="margin: -0.75rem 0 1rem;">Calibrate a drawing, walk a route, and leave capture points for review.</p>
       <div class="layout">
         <section class="panel stack">
           <div class="controls">

@@ -5,9 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>CASAI Field Capture</title>
     <link rel="icon" href="assets/logo.png" type="image/png" />
-    <link rel="stylesheet" href="styles.css?v=3" />
+    <link rel="stylesheet" href="styles.css?v=5" />
     <style>
-      .app-shell { max-width: 560px; }
       .capture-card { display: grid; gap: 0.9rem; }
       .map-surface {
         position: relative;
@@ -15,9 +14,9 @@
         border-radius: var(--radius-lg);
         min-height: 240px;
         background:
-          linear-gradient(rgba(20,23,26,0.06) 1px, transparent 1px),
-          linear-gradient(90deg, rgba(20,23,26,0.06) 1px, transparent 1px),
-          linear-gradient(135deg, var(--gold-tint) 0%, var(--bg) 60%);
+          linear-gradient(rgba(26,29,33,0.07) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(26,29,33,0.07) 1px, transparent 1px),
+          var(--surface-muted);
         background-size: 24px 24px, 24px 24px, 100% 100%;
         overflow: hidden;
         cursor: crosshair;
@@ -26,10 +25,10 @@
         position: absolute;
         width: 18px;
         height: 18px;
-        background: var(--gold-dark);
+        background: var(--accent-dark);
         border-radius: 50%;
         border: 3px solid white;
-        box-shadow: 0 4px 10px rgba(201, 138, 31, 0.5);
+        box-shadow: 0 2px 8px rgba(26, 29, 33, 0.35);
         transform: translate(-50%, -50%);
       }
       .map-label {
@@ -37,11 +36,12 @@
         left: 0.8rem;
         top: 0.8rem;
         padding: 0.35rem 0.55rem;
-        border-radius: 999px;
-        background: rgba(255,255,255,0.85);
+        border-radius: var(--radius-sm);
+        background: rgba(255,255,255,0.92);
         border: 1px solid var(--border);
         font-size: 0.78rem;
         color: var(--ink-soft);
+        font-weight: 600;
       }
       .mini-grid {
         display: grid;
@@ -112,10 +112,10 @@
       .status-pill {
         padding: 0.65rem 0.75rem;
         border-radius: var(--radius-md);
-        border: 1px solid var(--gold);
-        background: var(--gold-tint);
-        color: var(--gold-dark);
-        font-weight: 700;
+        border: 1px solid #f0d4a8;
+        background: var(--accent-tint);
+        color: var(--accent-dark);
+        font-weight: 600;
         text-align: center;
         font-size: 0.85rem;
       }
@@ -131,25 +131,35 @@
     </style>
   </head>
   <body>
-    <div class="app-shell">
+    <a class="skip-link" href="#main">Skip to content</a>
+    <div class="app-shell narrow">
       <header class="site-header">
         <div class="brand">
           <img class="brand-logo" src="assets/logo.png" alt="CASAI logo" />
           <div class="brand-text">
-            <span class="eyebrow">CASAI / Draft 1</span>
+            <span class="eyebrow">CASAI</span>
             <h1>Field capture</h1>
           </div>
         </div>
-        <div class="site-nav">
-          <a href="login.html"><button class="quiet" type="button">Account</button></a>
-          <a href="floorplan.html"><button class="secondary" type="button">Floor plan walkthrough</button></a>
-          <span class="badge">mobile</span>
-        </div>
+        <nav class="site-nav" aria-label="Primary">
+          <a class="nav-link" href="login.html">
+            <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-user"></use></svg>
+            Account
+          </a>
+          <a class="nav-link" href="floorplan.html">
+            <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-layout"></use></svg>
+            Floor plan
+          </a>
+          <a class="nav-link" href="index.html">
+            <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-home"></use></svg>
+            Projects
+          </a>
+        </nav>
       </header>
 
-      <div class="card capture-card">
-      <div class="status-banner">
-        Browser-first flow ready for Insta360 X6 testing. Add location, heading, and native 360 files without blocking the field technician on a native app.
+      <main id="main" class="card capture-card">
+      <div class="status-banner is-info">
+        Add location, heading, and media. Native 360 files are optional and do not block capture.
       </div>
 
       <div class="mini-grid">
@@ -215,7 +225,7 @@
       <div style="margin-top:0.7rem;">
         <div class="label">Native 360 file upload</div>
         <input id="native-file-upload" type="file" accept=".insp,.insv,.zip,.jpg,.jpeg,.png" />
-        <div id="camera-mode" class="label" style="margin-top:0.5rem; color: var(--gold-dark);">Camera mode: checking...</div>
+        <div id="camera-mode" class="label" style="margin-top:0.5rem; color: var(--accent-dark);">Camera mode: checking...</div>
       </div>
 
       <div id="native-preview" class="native-preview" aria-live="polite">
@@ -239,12 +249,15 @@
       </div>
 
       <div class="controls">
-        <button id="capture-btn" class="primary">Save pin</button>
+        <button id="capture-btn" class="primary">
+          <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-save"></use></svg>
+          Save pin
+        </button>
         <button id="review-btn" class="secondary" type="button" onclick="window.location.href='review.html'">Open review</button>
         <div id="message" class="summary">Ready to capture.</div>
         <div id="recent-pins" class="summary"></div>
       </div>
-      </div>
+      </main>
     </div>
 
     <script src="security.js?v=2"></script>

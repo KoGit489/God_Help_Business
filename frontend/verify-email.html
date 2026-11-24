@@ -5,22 +5,53 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Verify Email | CASAI</title>
     <link rel="icon" href="assets/logo.png" type="image/png" />
-    <link rel="stylesheet" href="styles.css?v=4" />
+    <link rel="stylesheet" href="styles.css?v=5" />
     <style>
-      .verification-shell { max-width: 520px; }
-      .verification-form { display: grid; gap: 0.8rem; }
+      body.auth-page {
+        background: linear-gradient(180deg, var(--bg-elevated) 0%, var(--bg) 42%, var(--bg) 100%);
+      }
+      .auth-shell { max-width: 420px; padding-top: 2rem; }
+      .auth-hero { text-align: center; margin-bottom: 1.25rem; }
+      .auth-hero h1 { font-size: 1.45rem; margin: 0 0 0.25rem; }
+      .auth-hero p { margin: 0; font-size: 0.92rem; }
+      .verification-form { display: grid; gap: 0.85rem; }
       .verification-form[hidden] { display: none; }
-      .verification-status { min-height: 1.5rem; color: var(--muted); }
+      .verification-status {
+        min-height: 1.35rem;
+        margin-top: 0.25rem;
+        padding: 0.55rem 0.7rem;
+        border-radius: var(--radius-md);
+        border: 1px solid transparent;
+        font-size: 0.875rem;
+        color: var(--muted);
+      }
+      .verification-status:empty { display: none; }
+      .auth-links { font-size: 0.875rem; font-weight: 600; }
+      .auth-links a {
+        color: var(--ink-soft);
+        text-decoration: underline;
+        text-underline-offset: 2px;
+      }
     </style>
   </head>
-  <body>
-    <main class="app-shell verification-shell">
+  <body class="auth-page">
+    <a class="skip-link" href="#main">Skip to content</a>
+    <main id="main" class="app-shell auth-shell">
       <header class="site-header">
         <div class="brand">
           <img class="brand-logo" src="assets/logo.png" alt="CASAI logo" />
-          <div class="brand-text"><span class="eyebrow">CASAI</span><h1>Verify email</h1></div>
+          <div class="brand-text"><span class="eyebrow">CASAI</span><h1>Account</h1></div>
         </div>
+        <nav class="site-nav" aria-label="Primary">
+          <a class="nav-link" href="login.html">Sign in</a>
+        </nav>
       </header>
+
+      <div class="auth-hero">
+        <h1>Verify email</h1>
+        <p class="muted">Confirm your address to keep account recovery available.</p>
+      </div>
+
       <section class="card stack">
         <form id="verification-request-form" class="verification-form">
           <label>Email<input id="verification-email" type="email" autocomplete="username" maxlength="254" required /></label>
@@ -30,8 +61,9 @@
           <button type="submit" class="primary">Verify email</button>
         </form>
         <p id="verification-status" class="verification-status" role="status" aria-live="polite"></p>
-        <a href="login.html">Back to sign in</a>
+        <div class="auth-links"><a href="login.html">Back to sign in</a></div>
       </section>
+      <footer class="site-footer"><a href="privacy.html">Privacy</a> · <a href="terms.html">Terms</a></footer>
     </main>
     <script src="verify-email.js?v=2"></script>
   </body>

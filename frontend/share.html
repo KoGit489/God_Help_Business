@@ -5,16 +5,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>CASAI Shared Review</title>
     <link rel="icon" href="assets/logo.png" type="image/png" />
-    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="styles.css?v=5" />
     <style>
-      .app-shell { max-width: 760px; }
-      .panel { margin-top: 1rem; padding: 1rem; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg); }
-      .summary-box { padding: 0.75rem; border-radius: var(--radius-md); border: 1px solid var(--border); background: var(--surface); }
+      .share-shell { max-width: 760px; }
+      .share-shell .panel { margin-top: 1rem; padding: 1rem; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-elevated); }
       ul { padding-left: 1.2rem; }
     </style>
   </head>
   <body>
-    <div class="app-shell">
+    <div class="app-shell share-shell">
       <header class="site-header">
         <div class="brand">
           <img class="brand-logo" src="assets/logo.png" alt="CASAI logo" />
@@ -23,9 +22,9 @@
             <h1>Shared review</h1>
           </div>
         </div>
-        <span class="pill">Shared project review</span>
+        <span class="badge">Public</span>
       </header>
-      <div class="card">
+      <main class="card">
       <h2 id="title">Loading shared project...</h2>
       <p id="description" class="muted"></p>
       <div class="summary-grid">
@@ -37,8 +36,11 @@
         <h2>Captured evidence</h2>
         <ul id="pins"></ul>
       </div>
-      <button id="copy-link-btn" class="primary" type="button" style="margin-top: 1rem; width: 100%;">Copy review link</button>
-      </div>
+      <button id="copy-link-btn" class="primary" type="button" style="margin-top: 1rem; width: 100%;">
+        <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-link"></use></svg>
+        Copy review link
+      </button>
+      </main>
     </div>
     <script src="security.js?v=2"></script>
     <script>
