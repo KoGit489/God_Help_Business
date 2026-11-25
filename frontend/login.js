@@ -14,7 +14,7 @@ const apiBases = buildApiBases();
 const status = document.getElementById('auth-status');
 const loginForm = document.getElementById('login-form');
 const accountPanel = document.getElementById('account-panel');
-const createUserForm = document.getElementById('create-user-form');
+const createUserLink = document.getElementById('create-user-link');
 const deleteAccountForm = document.getElementById('delete-account-form');
 const mfaSetupForm = document.getElementById('mfa-setup-form');
 const mfaEnableForm = document.getElementById('mfa-enable-form');
@@ -74,7 +74,7 @@ async function loadCurrentUser() {
     document.getElementById('account-email').textContent = user.email;
     document.getElementById('account-verification').textContent = user.email_verified ? 'Email verified or grandfathered.' : 'Email not yet verified.';
     document.getElementById('account-verify-link').hidden = user.email_verified;
-    createUserForm.hidden = !user.is_admin;
+    createUserLink.hidden = !user.is_admin;
     setStatus(user.is_admin ? 'Signed in as administrator.' : 'Signed in.', 'success');
     await loadMfaStatus();
   } catch (error) {
@@ -140,28 +140,6 @@ document.getElementById('logout-button').addEventListener('click', async () => {
   document.getElementById('mfa-recovery-panel').hidden = true;
   loginForm.reset();
   setStatus('Signed out.', 'success');
-});
-
-createUserForm.addEventListener('submit', async (event) => {
-  event.preventDefault();
-  const submitButton = createUserForm.querySelector('button[type="submit"]');
-  submitButton.disabled = true;
-  setStatus('Creating account...', 'loading');
-  try {
-    const user = await apiRequest('/auth/users', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name: document.getElementById('new-user-name').value,
-        email: document.getElementById('new-user-email').value,
-        password: document.getElementById('new-user-password').value,
-        is_admin: document.getElementById('new-user-admin').checked,
-      }),
-    });
-    createUserForm.reset();
-    setStatus(`Account created for ${user.email}. Email verification is not yet complete.`, 'success');
-  } catch (error) { setStatus(`Account creation failed: ${error.message}`, 'error'); }
-  finally { submitButton.disabled = false; }
 });
 
 document.getElementById('delete-account-toggle').addEventListener('click', () => {

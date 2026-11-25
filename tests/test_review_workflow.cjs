@@ -136,6 +136,67 @@ test('sign-in preserves the server error without retrying another API base', asy
   assert.deepEqual(requests, ['https://example.com/auth/login']);
 });
 
+for (const isAdmin of [false, true]) {
+  test(`account creation uses the ${isAdmin ? 'administrator' : 'public'} endpoint`, async () => {
+    const requests = [];
+    const elements = new Map();
+    function element(id) {
+      if (!elements.has(id)) elements.set(id, {
+        value: '', hidden: true, disabled: true, checked: false, textContent: '',
+        addEventListener(type, handler) { this[type] = handler; },
+        reset() { this.resetCalled = true; },
+      });
+      return elements.get(id);
+    }
+    element('registration-name').value = 'New User';
+    element('registration-email').value = 'new@example.com';
+    element('registration-password').value = 'a secure new passphrase';
+    element('registration-confirm').value = 'a secure new passphrase';
+    element('registration-admin').checked = true;
+    const context = vm.createContext({
+      document: { getElementById: element },
+      fetch: async (url, options) => {
+        requests.push({ url, options });
+        if (url === '/auth/me') return isAdmin
+          ? { ok: true, status: 200, json: async () => ({ is_admin: true }) }
+          : { ok: false, status: 401 };
+        if (url === '/auth/registration') return { ok: true, status: 200, json: async () => ({ available: true }) };
+        return { ok: true, status: isAdmin ? 201 : 202, json: async () => ({ message: 'Check your inbox.' }) };
+      },
+    });
+    const source = fs.readFileSync(path.join(__dirname, '../frontend/register.js'), 'utf8');
+    vm.runInContext(source.replace(/initializeRegistration\(\);\s*$/, ''), context);
+    await vm.runInContext('initializeRegistration()', context);
+    assert.equal(element('registration-admin-option').hidden, !isAdmin);
+    await element('registration-form').submit({ preventDefault() {} });
+    const request = requests[requests.length - 1];
+    assert.equal(request.url, isAdmin ? '/auth/users' : '/auth/register');
+    assert.equal(request.options.credentials, 'same-origin');
+    const payload = JSON.parse(request.options.body);
+    assert.equal(payload.is_admin, isAdmin ? true : undefined);
+    assert.equal(element('registration-form').resetCalled, true);
+    assert.equal(element('registration-submit').disabled, false);
+  });
+}
+
+test('disabled public registration is explained before submission', async () => {
+  const elements = new Map();
+  const context = vm.createContext({
+    document: { getElementById(id) {
+      if (!elements.has(id)) elements.set(id, { hidden: true, disabled: true, textContent: '', addEventListener() {} });
+      return elements.get(id);
+    } },
+    fetch: async (url) => url === '/auth/me'
+      ? { ok: false, status: 401 }
+      : { ok: true, status: 200, json: async () => ({ available: false }) },
+  });
+  const source = fs.readFileSync(path.join(__dirname, '../frontend/register.js'), 'utf8');
+  vm.runInContext(source.replace(/initializeRegistration\(\);\s*$/, ''), context);
+  await vm.runInContext('initializeRegistration()', context);
+  assert.equal(elements.get('registration-submit').disabled, true);
+  assert.match(elements.get('registration-status').textContent, /unavailable/);
+});
+
 test('frontend assets do not contain common private credential formats', () => {
   const directory = path.join(__dirname, '../frontend');
   const patterns = [

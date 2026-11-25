@@ -160,6 +160,137 @@ def test_individual_login_ignores_spoofed_user_header_and_logout_revokes_session
     assert client.get("/projects").status_code == 401
 
 
+def test_public_registration_requires_verification_and_cannot_create_admin(monkeypatch) -> None:
+    from limits.storage import MemoryStorage
+    from limits.strategies import MovingWindowRateLimiter
+
+    reset_demo_store()
+    client.cookies.clear()
+    monkeypatch.setattr(main, "PERSISTENCE_MODE", "memory")
+    monkeypatch.setattr(main, "AUTH_REQUIRED", True)
+    monkeypatch.setattr(main, "ALLOW_ACCOUNT_REGISTRATION", True)
+    monkeypatch.setattr(main, "EMAIL_VERIFICATION_REQUIRED", True)
+    monkeypatch.setattr(main, "SESSION_COOKIE_SECURE", False)
+    monkeypatch.setattr(main, "login_limiter", MovingWindowRateLimiter(MemoryStorage()))
+    monkeypatch.setenv("SMTP_HOST", "smtp.example.test")
+    monkeypatch.setenv("SMTP_FROM", "noreply@example.test")
+    monkeypatch.setenv("PUBLIC_APP_ORIGIN", "https://example.test")
+    monkeypatch.delenv("SMTP_USERNAME", raising=False)
+    monkeypatch.delenv("SMTP_PASSWORD", raising=False)
+    deliveries = []
+    monkeypatch.setattr(main, "_send_verification_email", lambda settings, recipient, token: deliveries.append((recipient, token)))
+    payload = {"email": "new@example.com", "name": "New User", "password": "a secure new passphrase 2026"}
+
+    assert client.get("/auth/registration").json() == {"available": True}
+    assert client.post("/auth/register", headers=same_origin, json={**payload, "is_admin": True}).status_code == 422
+    created = client.post("/auth/register", headers=same_origin, json=payload)
+    assert created.status_code == 202
+    assert main.users_by_email[payload["email"]]["is_admin"] is False
+    assert main.users_by_email[payload["email"]]["email_verified"] is False
+    assert len(deliveries) == 1
+    duplicate = client.post("/auth/register", headers=same_origin, json=payload)
+    assert duplicate.status_code == 202 and duplicate.json() == created.json()
+    assert len(deliveries) == 1
+    credentials = {"email": payload["email"], "password": payload["password"]}
+    assert client.post("/auth/login", headers=same_origin, json=credentials).status_code == 403
+    assert client.post("/auth/email-verification/confirm", headers=same_origin, json={"token": deliveries[0][1]}).status_code == 204
+    assert client.post("/auth/login", headers=same_origin, json=credentials).status_code == 200
+    client.cookies.clear()
+
+
+def test_public_registration_is_disabled_or_requires_email_verification(monkeypatch) -> None:
+    monkeypatch.setattr(main, "AUTH_REQUIRED", True)
+    payload = {"email": "new@example.com", "name": "New User", "password": "a secure new passphrase 2026"}
+    monkeypatch.setattr(main, "ALLOW_ACCOUNT_REGISTRATION", False)
+    assert client.get("/auth/registration").json() == {"available": False}
+    assert client.post("/auth/register", headers=same_origin, json=payload).status_code == 403
+    monkeypatch.setattr(main, "ALLOW_ACCOUNT_REGISTRATION", True)
+    monkeypatch.setattr(main, "EMAIL_VERIFICATION_REQUIRED", False)
+    assert client.get("/auth/registration").json() == {"available": False}
+    assert client.post("/auth/register", headers=same_origin, json=payload).status_code == 503
+    monkeypatch.setattr(main, "EMAIL_VERIFICATION_REQUIRED", True)
+    monkeypatch.delenv("SMTP_HOST", raising=False)
+    assert client.get("/auth/registration").json() == {"available": False}
+    assert client.post("/auth/register", headers=same_origin, json=payload).status_code == 503
+
+
+def test_public_registration_is_rate_limited(monkeypatch) -> None:
+    from limits import RateLimitItemPerMinute
+    from limits.storage import MemoryStorage
+    from limits.strategies import MovingWindowRateLimiter
+
+    reset_demo_store()
+    monkeypatch.setattr(main, "PERSISTENCE_MODE", "memory")
+    monkeypatch.setattr(main, "AUTH_REQUIRED", True)
+    monkeypatch.setattr(main, "ALLOW_ACCOUNT_REGISTRATION", True)
+    monkeypatch.setattr(main, "EMAIL_VERIFICATION_REQUIRED", True)
+    monkeypatch.setattr(main, "login_limiter", MovingWindowRateLimiter(MemoryStorage()))
+    monkeypatch.setattr(main, "LOGIN_ACCOUNT_LIMIT", RateLimitItemPerMinute(2))
+    monkeypatch.setenv("SMTP_HOST", "smtp.example.test")
+    monkeypatch.setenv("SMTP_FROM", "noreply@example.test")
+    monkeypatch.setenv("PUBLIC_APP_ORIGIN", "https://example.test")
+    monkeypatch.delenv("SMTP_USERNAME", raising=False)
+    monkeypatch.delenv("SMTP_PASSWORD", raising=False)
+    monkeypatch.setattr(main, "_send_verification_email", lambda settings, recipient, token: None)
+    payload = {"email": "limited@example.com", "name": "New User", "password": "a secure new passphrase 2026"}
+    assert client.post("/auth/register", headers=same_origin, json=payload).status_code == 202
+    assert client.post("/auth/register", headers=same_origin, json=payload).status_code == 202
+    limited = client.post("/auth/register", headers=same_origin, json=payload)
+    assert limited.status_code == 429
+    assert limited.headers["retry-after"] == "60"
+
+
+def test_registration_page_is_linked_from_sign_in() -> None:
+    login = client.get("/login.html")
+    registration = client.get("/register.html")
+    assert login.status_code == registration.status_code == 200
+    assert 'href="register.html"' in login.text
+    assert 'id="registration-form"' in registration.text
+
+
+def test_database_public_registration_stores_only_hashed_verification_token(monkeypatch, tmp_path) -> None:
+    from limits.storage import MemoryStorage
+    from limits.strategies import MovingWindowRateLimiter
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'registration.sqlite'}", connect_args={"check_same_thread": False})
+    main.Base.metadata.create_all(engine)
+    monkeypatch.setattr(main, "PERSISTENCE_MODE", "database")
+    monkeypatch.setattr(main, "AUTH_REQUIRED", True)
+    monkeypatch.setattr(main, "ALLOW_ACCOUNT_REGISTRATION", True)
+    monkeypatch.setattr(main, "EMAIL_VERIFICATION_REQUIRED", True)
+    monkeypatch.setattr(main, "SESSION_COOKIE_SECURE", False)
+    monkeypatch.setattr(main, "SessionLocal", sessionmaker(bind=engine))
+    monkeypatch.setattr(main, "login_limiter", MovingWindowRateLimiter(MemoryStorage()))
+    monkeypatch.setenv("SMTP_HOST", "smtp.example.test")
+    monkeypatch.setenv("SMTP_FROM", "noreply@example.test")
+    monkeypatch.setenv("PUBLIC_APP_ORIGIN", "https://example.test")
+    monkeypatch.delenv("SMTP_USERNAME", raising=False)
+    monkeypatch.delenv("SMTP_PASSWORD", raising=False)
+    deliveries = []
+    monkeypatch.setattr(main, "_send_verification_email", lambda settings, recipient, token: deliveries.append(token))
+    client.cookies.clear()
+    try:
+        response = client.post("/auth/register", headers=same_origin, json={
+            "email": "database-signup@example.com", "name": "New User", "password": "a secure new passphrase 2026",
+        })
+        assert response.status_code == 202
+        assert len(deliveries) == 1
+        with main.SessionLocal() as db:
+            user = db.query(main.UserRecord).filter_by(email="database-signup@example.com").one()
+            assert user.is_admin is False and user.email_verified is False
+            assert db.get(main.EmailVerificationRecord, main._session_token_hash(deliveries[0])) is not None
+            assert db.get(main.EmailVerificationRecord, deliveries[0]) is None
+        credentials = {"email": "database-signup@example.com", "password": "a secure new passphrase 2026"}
+        assert client.post("/auth/login", headers=same_origin, json=credentials).status_code == 403
+        assert client.post("/auth/email-verification/confirm", headers=same_origin, json={"token": deliveries[0]}).status_code == 204
+        assert client.post("/auth/login", headers=same_origin, json=credentials).status_code == 200
+    finally:
+        client.cookies.clear()
+        engine.dispose()
+
+
 def test_admin_can_create_a_separate_individual_account(monkeypatch) -> None:
     reset_demo_store()
     monkeypatch.setattr(main, "AUTH_REQUIRED", True)

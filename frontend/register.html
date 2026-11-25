@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Create Account | CASAI</title>
+    <link rel="icon" href="assets/logo.png" type="image/png" />
+    <link rel="stylesheet" href="styles.css?v=5" />
+    <style>
+      body.auth-page { background: linear-gradient(180deg, var(--bg-elevated) 0%, var(--bg) 42%); }
+      .registration-shell { max-width: 420px; padding-top: 2rem; }
+      .registration-heading { text-align: center; margin-bottom: 1.25rem; }
+      .registration-heading h1 { font-size: 1.45rem; margin: 0 0 0.25rem; }
+      .registration-form { display: grid; gap: 0.85rem; }
+      .registration-form button { width: 100%; }
+      .registration-links { font-size: 0.875rem; }
+      .registration-links a { color: var(--ink-soft); text-decoration: underline; text-underline-offset: 2px; }
+      .registration-status:empty { display: none; }
+      .registration-status { margin: 0; overflow-wrap: anywhere; }
+      .registration-admin { display: flex; align-items: center; gap: 0.5rem; }
+      [hidden] { display: none !important; }
+      @media (max-width: 480px) { .registration-shell { padding-top: 1rem; } }
+    </style>
+  </head>
+  <body class="auth-page">
+    <a class="skip-link" href="#main">Skip to content</a>
+    <main id="main" class="app-shell registration-shell">
+      <header class="site-header">
+        <div class="brand">
+          <img class="brand-logo" src="assets/logo.png" alt="CASAI logo" />
+          <div class="brand-text"><span class="eyebrow">CASAI</span><h1>Account</h1></div>
+        </div>
+      </header>
+      <div class="registration-heading"><h1>Create account</h1></div>
+      <section class="card stack" aria-label="Create account">
+        <form id="registration-form" class="registration-form">
+          <label>Name<input id="registration-name" autocomplete="name" required maxlength="128" /></label>
+          <label>Email<input id="registration-email" type="email" autocomplete="email" required maxlength="254" /></label>
+          <label>Password<input id="registration-password" type="password" autocomplete="new-password" required minlength="12" maxlength="256" /></label>
+          <small class="muted">Use at least 12 characters.</small>
+          <label>Confirm password<input id="registration-confirm" type="password" autocomplete="new-password" required minlength="12" maxlength="256" /></label>
+          <label id="registration-admin-option" class="registration-admin" hidden><input id="registration-admin" type="checkbox" /> Administrator</label>
+          <button id="registration-submit" class="primary" type="submit" disabled>Create account</button>
+        </form>
+        <p id="registration-status" class="registration-status" role="status" aria-live="polite"></p>
+        <div class="registration-links">Already have an account? <a href="login.html">Sign in</a></div>
+      </section>
+      <footer class="site-footer"><a href="privacy.html">Privacy</a> · <a href="terms.html">Terms</a></footer>
+    </main>
+    <script src="register.js?v=1"></script>
+  </body>
+</html>
