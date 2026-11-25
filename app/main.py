@@ -874,8 +874,8 @@ def _pin_response_from_memory(pin: dict[str, Any]) -> PinResponse:
         latitude=pin["latitude"],
         longitude=pin["longitude"],
         heading=pin["heading"],
-        position_x=pin["position_x"],
-        position_y=pin["position_y"],
+        position_x=pin.get("position_x"),
+        position_y=pin.get("position_y"),
         auto_position_x=pin.get("auto_position_x"),
         auto_position_y=pin.get("auto_position_y"),
         alignment_confidence=pin.get("alignment_confidence", 0.0),
@@ -884,8 +884,8 @@ def _pin_response_from_memory(pin: dict[str, Any]) -> PinResponse:
         telemetry=pin.get("telemetry"),
         waypoints=pin.get("waypoints"),
         preview_url=preview_url,
-        processing_status=pin["processing_status"],
-        processing_error=pin["processing_error"],
+        processing_status=pin.get("processing_status", "not_requested"),
+        processing_error=pin.get("processing_error"),
         captured_on=pin["captured_on"],
         photo_key=pin.get("photo_key"),
         media_type=pin.get("media_type"),
@@ -950,7 +950,7 @@ def _build_project_detail_memory(project_id: str) -> ProjectDetailResponse:
 
     if not project.get("floor_plan"):
         project["floor_plan"] = _recover_floor_plan(project_id)
-    pin_items = [PinResponse(**pin) for pin in pins_by_project.get(project_id, [])]
+    pin_items = [_pin_response_from_memory(pin) for pin in pins_by_project.get(project_id, [])]
     return ProjectDetailResponse(
         id=project["id"],
         title=project["title"],

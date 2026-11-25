@@ -1,9 +1,45 @@
 from fastapi.testclient import TestClient
 
+from app import main
 from app.main import app, reset_demo_store
 
 
 client = TestClient(app)
+
+
+def test_list_pins_tolerates_incomplete_memory_pin_records() -> None:
+    reset_demo_store()
+    project = client.post(
+        "/projects",
+        json={"title": "Legacy Pins", "description": "Incomplete memory pin shape"},
+    ).json()
+    project_id = project["id"]
+    main.pins_by_project[project_id] = [
+        {
+            "id": "legacy-pin-1",
+            "project_id": project_id,
+            "latitude": 5.6037,
+            "longitude": -0.1870,
+            "heading": 34.0,
+            "captured_on": "2026-08-08",
+            "photo_key": "uploads/demo/roof.jpg",
+            "media_type": "photo",
+        }
+    ]
+    main.pins_by_id["legacy-pin-1"] = main.pins_by_project[project_id][0]
+
+    response = client.get(f"/projects/{project_id}/pins")
+    assert response.status_code == 200
+    pins = response.json()
+    assert len(pins) == 1
+    assert pins[0]["id"] == "legacy-pin-1"
+    assert pins[0]["position_x"] is None
+    assert pins[0]["position_y"] is None
+    assert pins[0]["processing_status"] == "not_requested"
+
+    detail = client.get(f"/projects/{project_id}")
+    assert detail.status_code == 200
+    assert detail.json()["pins"][0]["id"] == "legacy-pin-1"
 
 
 def test_create_project_and_pin_flow() -> None:
