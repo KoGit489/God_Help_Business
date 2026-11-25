@@ -29,6 +29,8 @@ class PinRecord(Base):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     project_id: Mapped[str] = mapped_column(String(64), ForeignKey("projects.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    route_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     latitude: Mapped[float] = mapped_column(Float, nullable=False)
     longitude: Mapped[float] = mapped_column(Float, nullable=False)
     heading: Mapped[float] = mapped_column(Float, nullable=False)

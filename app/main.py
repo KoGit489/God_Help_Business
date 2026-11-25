@@ -33,7 +33,7 @@ from limits import RateLimitItemPerMinute
 from limits.storage import storage_from_string
 from limits.strategies import MovingWindowRateLimiter
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import create_engine, inspect, select, text
+from sqlalchemy import create_engine, func, inspect, select, text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -123,6 +123,31 @@ def _as_utc(value: datetime) -> datetime:
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
 
 
+def _migrate_pin_ordering() -> None:
+    columns = {column["name"] for column in inspect(engine).get_columns("pins")}
+    timestamp_type = "TIMESTAMP WITH TIME ZONE" if engine.dialect.name == "postgresql" else "DATETIME"
+    now = _utc_now()
+    with engine.begin() as connection:
+        if "created_at" not in columns:
+            connection.execute(text(f"ALTER TABLE pins ADD COLUMN created_at {timestamp_type}"))
+        if "route_order" not in columns:
+            connection.execute(text("ALTER TABLE pins ADD COLUMN route_order INTEGER"))
+        connection.execute(text("UPDATE pins SET created_at = :now WHERE created_at IS NULL"), {"now": now})
+        connection.execute(text("UPDATE pins SET route_order = 0 WHERE route_order IS NULL"))
+        for project_id, in connection.execute(text("SELECT DISTINCT project_id FROM pins")).all():
+            pins = connection.execute(text("SELECT id, route_order FROM pins WHERE project_id = :project_id ORDER BY created_at, id"), {"project_id": project_id}).all()
+            next_route_order = max((route_order or 0 for _, route_order in pins), default=0)
+            for pin_id, route_order in pins:
+                if route_order in (None, 0):
+                    next_route_order += 1
+                    connection.execute(text("UPDATE pins SET route_order = :route_order WHERE id = :pin_id"), {"route_order": next_route_order, "pin_id": pin_id})
+        if engine.dialect.name == "postgresql":
+            connection.execute(text("ALTER TABLE pins ALTER COLUMN created_at SET NOT NULL"))
+            connection.execute(text("ALTER TABLE pins ALTER COLUMN route_order SET NOT NULL"))
+        connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS idx_pins_project_route_unique ON pins(project_id, route_order)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS idx_pins_project_route ON pins(project_id, route_order, created_at, id)"))
+
+
 def _migrate_legacy_share_links() -> None:
     columns = {column["name"] for column in inspect(engine).get_columns("share_links")}
     timestamp_type = "TIMESTAMP WITH TIME ZONE" if engine.dialect.name == "postgresql" else "DATETIME"
@@ -194,6 +219,7 @@ async def lifespan(_: FastAPI):
             if not require_rls:
                 Base.metadata.create_all(bind=engine)
                 _migrate_legacy_share_links()
+                _migrate_pin_ordering()
                 project_columns = {column["name"] for column in inspect(engine).get_columns("projects")}
                 if "floor_plan_json" not in project_columns:
                     with engine.begin() as connection:
@@ -302,6 +328,7 @@ class PinCalibrationRequest(BaseModel):
 class PinResponse(BaseModel):
     id: str
     project_id: str
+    route_order: int = 0
     latitude: float
     longitude: float
     heading: float
@@ -813,6 +840,7 @@ def _pin_response_from_record(record: PinRecord) -> PinResponse:
     return PinResponse(
         id=record.id,
         project_id=record.project_id,
+        route_order=record.route_order,
         latitude=record.latitude,
         longitude=record.longitude,
         heading=record.heading,
@@ -842,6 +870,7 @@ def _pin_response_from_memory(pin: dict[str, Any]) -> PinResponse:
     return PinResponse(
         id=pin["id"],
         project_id=pin["project_id"],
+        route_order=pin.get("route_order", 0),
         latitude=pin["latitude"],
         longitude=pin["longitude"],
         heading=pin["heading"],
@@ -900,7 +929,8 @@ def _project_detail_from_record(db: Session, record: ProjectRecord) -> ProjectDe
         if recovered_plan:
             record.floor_plan_json = json.dumps(recovered_plan)
             db.commit()
-    pins = db.query(PinRecord).filter(PinRecord.project_id == record.id).all()
+    pins = (db.query(PinRecord).filter(PinRecord.project_id == record.id)
+            .order_by(PinRecord.route_order.asc(), PinRecord.created_at.asc(), PinRecord.id.asc()).all())
     pin_items = [_pin_response_from_record(pin) for pin in pins]
     return ProjectDetailResponse(
         id=record.id,
@@ -1290,6 +1320,7 @@ def _seed_demo_data() -> None:
             pin_a = PinRecord(
                 id=str(uuid4()),
                 project_id=project_id,
+                route_order=1,
                 latitude=5.6037,
                 longitude=-0.1870,
                 heading=34.0,
@@ -1302,6 +1333,7 @@ def _seed_demo_data() -> None:
             pin_b = PinRecord(
                 id=str(uuid4()),
                 project_id=project_id,
+                route_order=2,
                 latitude=5.6041,
                 longitude=-0.1880,
                 heading=118.0,
@@ -1921,7 +1953,8 @@ def project_visual_odometry(project_id: str, request: Request) -> dict[str, obje
     frame_paths: list[str] = []
     if PERSISTENCE_MODE == "database":
         with SessionLocal() as db:
-            pins = db.query(PinRecord).filter(PinRecord.project_id == project_id).order_by(PinRecord.captured_on).all()
+            pins = (db.query(PinRecord).filter(PinRecord.project_id == project_id)
+                     .order_by(PinRecord.route_order.asc(), PinRecord.created_at.asc(), PinRecord.id.asc()).all())
             for pin in pins:
                 if pin.preview_key:
                     candidate = UPLOAD_DIR / pin.preview_key.removeprefix("uploads/")
@@ -2218,9 +2251,12 @@ def create_pin(project_id: str, payload: PinCreateRequest, request: Request) -> 
             if not project:
                 raise HTTPException(status_code=404, detail="Project not found")
 
+            next_route_order = (db.query(func.max(PinRecord.route_order)).filter(PinRecord.project_id == project_id).scalar() or 0) + 1
             pin = PinRecord(
                 id=str(uuid4()),
                 project_id=project_id,
+                created_at=_utc_now(),
+                route_order=next_route_order,
                 latitude=payload.latitude,
                 longitude=payload.longitude,
                 heading=payload.heading,
@@ -2246,6 +2282,7 @@ def create_pin(project_id: str, payload: PinCreateRequest, request: Request) -> 
     pin = {
         "id": pin_id,
         "project_id": project_id,
+        "route_order": len(pins_by_project[project_id]) + 1,
         "latitude": payload.latitude,
         "longitude": payload.longitude,
         "heading": payload.heading,
@@ -2321,7 +2358,8 @@ def list_pins(project_id: str, request: Request) -> list[PinResponse]:
             project = db.get(ProjectRecord, project_id)
             if not project:
                 raise HTTPException(status_code=404, detail="Project not found")
-            pins = db.query(PinRecord).filter(PinRecord.project_id == project_id).all()
+            pins = (db.query(PinRecord).filter(PinRecord.project_id == project_id)
+                     .order_by(PinRecord.route_order.asc(), PinRecord.created_at.asc(), PinRecord.id.asc()).all())
             return [_pin_response_from_record(pin) for pin in pins]
 
     if project_id not in projects:

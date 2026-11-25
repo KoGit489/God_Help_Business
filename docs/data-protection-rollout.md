@@ -34,6 +34,12 @@ The checker verifies RLS readiness before inserting two temporary accounts, exer
 
 RLS does not currently protect account/session/authentication tables. The current share-media route also remains owner-authenticated; this policy does not create guest access to media files. A separate migration workflow is required for future schema changes while strict RLS mode is active.
 
+## Pin route ordering migration
+
+Pin walkthrough order is stored explicitly in `pins.route_order`, with `pins.created_at` as creation metadata. Database mode assigns the next route order on pin creation and orders project detail, review, pin-list, and visual-odometry responses by `route_order`, then creation timestamp and pin ID.
+
+When normal migrations are active, app startup adds these columns, backfills existing pins, and creates the project/route index. Strict RLS mode skips migrations, so apply `deploy/pin-order-migration.sql` as the database owner/migration role before updating the runtime app. This migration adds the columns, sets creation metadata, assigns a deterministic fallback order by existing pin ID for legacy rows, and creates a unique project/route index. It does not infer the user's original 360-route order if that order was never stored. Existing projects may require an authorized manual route review after migration.
+
 ## Restore inventory drill
 
 `app.restore_verify` captures exact table row counts and SHA-256/size checks for every media object referenced by pin and floor-plan records. It streams object contents and does not modify either database or bucket. Use separate read-only source and restored-target credentials, isolated restore resources, and a protected manifest. PostgreSQL inventory reads require a role able to see all rows despite RLS; keep that elevated read-only credential restricted. The manifest contains object keys and hashes, not file contents.
