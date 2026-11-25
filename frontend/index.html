@@ -3,86 +3,415 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>CASAI MVP</title>
+    <title>CASAI Projects</title>
     <link rel="icon" href="assets/logo.png" type="image/png" />
-    <link rel="stylesheet" href="styles.css?v=3" />
+    <link rel="stylesheet" href="styles.css?v=5" />
+    <style>
+      .dash-context {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem 1.25rem;
+        padding: 0.75rem 1rem;
+        margin-bottom: 1rem;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-lg);
+      }
+
+      .dash-user {
+        min-width: 0;
+      }
+
+      .dash-user strong {
+        display: block;
+        font-size: 0.95rem;
+      }
+
+      .dash-user .muted {
+        font-size: 0.85rem;
+      }
+
+      .dash-summary {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+      }
+
+      .dash-stat {
+        min-width: 5.5rem;
+        padding: 0.45rem 0.7rem;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        background: var(--bg-elevated);
+        text-align: center;
+      }
+
+      .dash-stat strong {
+        display: block;
+        font-family: var(--font-mono);
+        font-size: 1.15rem;
+        font-weight: 600;
+        line-height: 1.2;
+      }
+
+      .dash-stat span {
+        font-size: 0.72rem;
+        font-weight: 600;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+
+      .dash-layout {
+        display: grid;
+        gap: 1rem;
+        grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.25fr);
+        align-items: start;
+      }
+
+      .dash-panel {
+        display: grid;
+        gap: 0.85rem;
+      }
+
+      .dash-panel h2 {
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        margin: 0;
+      }
+
+      .workflow-strip {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0.5rem;
+      }
+
+      .workflow-strip a {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.2rem;
+        min-height: 72px;
+        padding: 0.7rem 0.8rem;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        background: var(--bg-elevated);
+        color: var(--ink);
+        font-weight: 600;
+        font-size: 0.88rem;
+      }
+
+      .workflow-strip a:hover {
+        border-color: var(--accent-dark);
+        background: var(--accent-tint);
+        color: var(--ink);
+      }
+
+      .workflow-strip a span {
+        font-size: 0.75rem;
+        font-weight: 500;
+        color: var(--muted);
+      }
+
+      #project-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        gap: 0.55rem;
+      }
+
+      #project-list > li {
+        margin: 0;
+        padding: 0.85rem 0.9rem;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        background: var(--bg-elevated);
+      }
+
+      #project-list > li.project-row {
+        display: grid;
+        gap: 0.45rem;
+      }
+
+      .project-row-top {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 0.4rem 0.75rem;
+      }
+
+      .project-row-top strong {
+        font-size: 0.98rem;
+      }
+
+      .project-meta {
+        font-size: 0.85rem;
+        color: var(--ink-soft);
+      }
+
+      .project-meta .coord {
+        color: var(--muted);
+      }
+
+      .project-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.4rem;
+        margin-top: 0.15rem;
+      }
+
+      .project-actions a {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.25rem;
+        min-height: 44px;
+        padding: 0.4rem 0.7rem;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        background: var(--surface);
+        font-size: 0.8rem;
+        font-weight: 600;
+        color: var(--ink);
+      }
+
+      .project-actions a:hover {
+        border-color: var(--accent-dark);
+        color: var(--accent-dark);
+      }
+
+      .project-actions a.primary-action {
+        background: var(--accent);
+        border-color: var(--accent-dark);
+        color: var(--ink);
+      }
+
+      .status-chip {
+        display: inline-flex;
+        align-items: center;
+        padding: 0.15rem 0.45rem;
+        border-radius: var(--radius-sm);
+        border: 1px solid var(--border);
+        background: var(--surface);
+        font-size: 0.7rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        color: var(--ink-soft);
+      }
+
+      .status-chip.is-ready {
+        border-color: #a7d9bf;
+        background: var(--success-tint);
+        color: #145c3a;
+      }
+
+      #dashboard-message {
+        margin: 0;
+        min-height: 1.25rem;
+        font-size: 0.875rem;
+        color: var(--muted);
+      }
+
+      #dashboard-message.is-error { color: var(--danger); }
+      #dashboard-message.is-success { color: var(--success); }
+      #dashboard-message.is-loading { color: var(--ink-soft); }
+
+      .create-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+      }
+
+      .create-actions .primary {
+        flex: 1 1 10rem;
+      }
+
+      .analytics-block {
+        margin-top: 0.5rem;
+        padding-top: 0.75rem;
+        border-top: 1px solid var(--border);
+      }
+
+      .analytics-block h3 {
+        font-size: 0.9rem;
+      }
+
+      #analytics-totals {
+        margin: 0.4rem 0 0;
+        padding-left: 1.1rem;
+        font-size: 0.85rem;
+        color: var(--ink-soft);
+      }
+
+      details.help-details {
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        background: var(--bg-elevated);
+        padding: 0.15rem 0.75rem;
+      }
+
+      details.help-details summary {
+        cursor: pointer;
+        list-style: none;
+        min-height: 40px;
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        font-size: 0.82rem;
+        font-weight: 600;
+        color: var(--ink-soft);
+        user-select: none;
+      }
+
+      details.help-details summary::-webkit-details-marker { display: none; }
+
+      details.help-details[open] {
+        padding-bottom: 0.75rem;
+      }
+
+      details.help-details .checklist {
+        margin-top: 0.5rem;
+      }
+
+      @media (max-width: 860px) {
+        .dash-layout { grid-template-columns: 1fr; }
+        .workflow-strip { grid-template-columns: 1fr; }
+      }
+
+      @media (max-width: 480px) {
+        .dash-context { align-items: flex-start; }
+        .dash-summary { width: 100%; }
+        .dash-stat { flex: 1 1 auto; }
+      }
+    </style>
   </head>
   <body>
+    <a class="skip-link" href="#main">Skip to content</a>
     <div class="app-shell">
       <header class="site-header">
         <div class="brand">
           <img class="brand-logo" src="assets/logo.png" alt="CASAI logo" />
           <div class="brand-text">
-            <span class="eyebrow">CASAI / Draft 1</span>
-            <h1>Dashboard</h1>
+            <span class="eyebrow">CASAI</span>
+            <h1>Projects</h1>
           </div>
         </div>
-        <nav class="site-nav">
-          <a href="login.html"><button type="button" class="quiet">Account</button></a>
-          <a href="map.html"><button type="button">Open capture view</button></a>
-          <a href="review.html"><button type="button" class="secondary">Open review view</button></a>
-          <a href="floorplan.html"><button type="button" class="primary">Open floor plan walkthrough</button></a>
+        <nav class="site-nav" aria-label="Primary">
+          <a class="nav-link" href="login.html">
+            <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-user"></use></svg>
+            Account
+          </a>
+          <a class="nav-link secondary" href="map.html" aria-current="false">
+            <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-camera"></use></svg>
+            Capture
+          </a>
+          <a class="nav-link" href="review.html">
+            <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-clipboard"></use></svg>
+            Review
+          </a>
+          <a class="nav-link primary" href="floorplan.html">
+            <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-layout"></use></svg>
+            Floor plan
+          </a>
         </nav>
       </header>
 
-      <section class="card stack">
-        <p>This dashboard acts as the central operating view for creating projects, capturing field evidence, and steering reviews toward a clean Phase 3 experience.</p>
+      <main id="main">
+        <section class="dash-context" aria-label="Project context">
+          <div class="dash-user">
+            <strong id="user-name">Loading...</strong>
+            <span id="user-email" class="muted"></span>
+          </div>
+          <div class="dash-summary" aria-label="Summary">
+            <div class="dash-stat"><strong id="project-count">0</strong><span>Projects</span></div>
+            <div class="dash-stat"><strong id="pin-count">0</strong><span>Pins</span></div>
+            <div class="dash-stat"><strong id="review-ready">0</strong><span>Ready</span></div>
+          </div>
+        </section>
 
-        <div class="status-banner">
-          <strong>Browser-first field workflow is ready</strong>
-          This setup is optimized for Insta360 X6 testing without blocking on a native app. Use the browser capture flow, keep native .insp/.insv files when supplied, and review/share from the project dashboard.
-          <ul class="checklist">
-            <li class="pending">Capture location, heading, and media in one step</li>
-            <li class="pending">Preserve native 360 files for later upload or processing</li>
-            <li class="pending">Review evidence and create a share link for stakeholders</li>
-          </ul>
+        <section id="onboarding" class="status-banner is-warning" hidden aria-live="polite" style="margin-bottom: 1rem;">
+          <strong id="onboarding-title"></strong>
+          <p id="onboarding-copy"></p>
+          <a id="onboarding-action" class="btn btn-primary" href="#create-project">Create project</a>
+        </section>
+
+        <p id="dashboard-message" role="status" aria-live="polite"></p>
+
+        <div class="workflow-strip" style="margin: 0.75rem 0 1rem;" aria-label="Primary workflows">
+          <a href="map.html">
+            <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-camera"></use></svg>
+            Field capture
+            <span>Location, heading, photo or 360</span>
+          </a>
+          <a href="floorplan.html">
+            <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-layout"></use></svg>
+            Floor plan
+            <span>Walk route and place waypoints</span>
+          </a>
+          <a href="review.html">
+            <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-share"></use></svg>
+            Review &amp; share
+            <span>Status, pins, stakeholder links</span>
+          </a>
         </div>
 
-        <div class="summary-grid">
-          <div class="summary-box"><strong id="project-count">0</strong><br />Projects</div>
-          <div class="summary-box"><strong id="pin-count">0</strong><br />Pins captured</div>
-          <div class="summary-box"><strong id="review-ready">0</strong><br />Ready for review</div>
+        <div class="dash-layout">
+          <section id="create-project" class="card dash-panel">
+            <h2>
+              <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-layers"></use></svg>
+              Create project
+            </h2>
+            <form id="project-form" class="stack">
+              <label>Project title<input id="title" placeholder="Project title" required maxlength="255" /></label>
+              <label>Description<input id="description" placeholder="Short description" maxlength="1000" /></label>
+              <div class="create-actions">
+                <button type="submit" class="primary">Create project</button>
+                <button id="sample-pin" type="button" class="quiet">Add demo pin</button>
+              </div>
+            </form>
+
+            <details class="help-details">
+              <summary>
+                <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-compass"></use></svg>
+                Field workflow tips
+              </summary>
+              <ul class="checklist">
+                <li class="pending">Capture location, heading, and media in one step</li>
+                <li class="pending">Preserve native 360 files when needed</li>
+                <li class="pending">Review evidence and share with stakeholders</li>
+              </ul>
+            </details>
+
+            <div id="analytics-settings" class="analytics-block" hidden>
+              <label><input id="analytics-consent" type="checkbox" /> Share optional usage counts</label>
+              <p class="muted">Counts cover dashboard visits and project creation. Only daily totals are stored; totals older than 90 days are removed when counts are recorded or viewed. Server access logs are separate. Turning this off stops future counts but cannot remove your past contributions from totals.</p>
+              <p id="analytics-status" class="muted" aria-live="polite"></p>
+            </div>
+            <div id="analytics-summary" class="analytics-block" hidden>
+              <h3>Usage counts</h3>
+              <ul id="analytics-totals"></ul>
+            </div>
+          </section>
+
+          <section class="card dash-panel">
+            <h2>
+              <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-clipboard"></use></svg>
+              Your projects
+            </h2>
+            <ul id="project-list"></ul>
+          </section>
         </div>
-      </section>
+      </main>
 
-      <section id="onboarding" class="status-banner" style="margin-top: 1rem;" hidden aria-live="polite">
-        <strong id="onboarding-title"></strong>
-        <p id="onboarding-copy"></p>
-        <a id="onboarding-action" class="btn btn-primary" href="#create-project">Create project</a>
-      </section>
-
-      <section class="card stack" style="margin-top: 1rem;">
-        <h2>Current user</h2>
-        <p><strong id="user-name">Loading...</strong><br /><span id="user-email" class="muted"></span></p>
-        <div id="analytics-settings" hidden>
-          <label><input id="analytics-consent" type="checkbox" /> Share optional usage counts</label>
-          <p class="muted">Counts cover dashboard visits and project creation. Only daily totals are stored; totals older than 90 days are removed when counts are recorded or viewed. Server access logs are separate. Turning this off stops future counts but cannot remove your past contributions from totals.</p>
-          <p id="analytics-status" class="muted" aria-live="polite"></p>
-        </div>
-        <div id="analytics-summary" hidden>
-          <h3>Usage counts</h3>
-          <ul id="analytics-totals"></ul>
-        </div>
-      </section>
-
-      <section id="create-project" class="card stack" style="margin-top: 1rem;">
-        <h2>Create project</h2>
-        <form id="project-form" class="stack">
-          <label>Project title<input id="title" placeholder="Project title" required maxlength="255" /></label>
-          <label>Description<input id="description" placeholder="Short description" maxlength="1000" /></label>
-          <button type="submit" class="primary">Create project</button>
-        </form>
-        <button id="sample-pin" class="secondary">Add demo pin to first project</button>
-      </section>
-
-      <section class="card stack" style="margin-top: 1rem;">
-        <h2>Projects</h2>
-        <ul id="project-list"></ul>
-      </section>
-      <footer style="margin-top: 1rem;"><a href="privacy.html">Privacy</a> | <a href="terms.html">Terms</a></footer>
+      <footer class="site-footer"><a href="privacy.html">Privacy</a> · <a href="terms.html">Terms</a></footer>
     </div>
 
     <script src="security.js?v=2"></script>
-    <script src="app.js?v=4"></script>
+    <script src="app.js?v=5"></script>
   </body>
 </html>

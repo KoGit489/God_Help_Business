@@ -41,6 +41,10 @@ const mediaTypeSelect = document.getElementById('media-type');
 const captureModePill = document.getElementById('capture-mode-pill');
 const nativeStatusPill = document.getElementById('native-status-pill');
 const useLocationButton = document.getElementById('use-location-btn');
+const liveCoords = document.getElementById('live-coords');
+const liveHeading = document.getElementById('live-heading');
+const latitudeInput = document.getElementById('latitude');
+const longitudeInput = document.getElementById('longitude');
 
 function redirectToLogin() {
   if (window.location.pathname.endsWith('/login.html')) return;
@@ -48,14 +52,24 @@ function redirectToLogin() {
   window.location.assign(`/login.html?next=${next}`);
 }
 
-function setMessage(text) {
+function setMessage(text, kind = '') {
   message.textContent = text;
+  message.className = kind ? `is-${kind}` : '';
+}
+
+function syncLiveContext() {
+  if (liveCoords) {
+    liveCoords.textContent = `${latitudeInput.value || '—'}, ${longitudeInput.value || '—'}`;
+  }
+  if (liveHeading) {
+    liveHeading.textContent = headingReadout.value || '—';
+  }
 }
 
 function renderNativeUploadPreview(file) {
   if (!file) {
     nativePathLabel.textContent = 'No native file selected';
-    nativePreviewBody.innerHTML = '<div class="native-placeholder">Upload an Insta360 X6 file or image to preview it here without blocking the browser testing flow.</div>';
+    nativePreviewBody.innerHTML = '<div class="native-placeholder">Optional Insta360 X6 file or image preview.</div>';
     nativeStatusPill.textContent = 'Native file: optional';
     return;
   }
@@ -95,7 +109,7 @@ async function loadCameraStatus() {
     nativeCameraMode.textContent = `Camera mode: ${status.mode}`;
     captureModePill.textContent = status.mode === 'sdk' ? 'Mode: direct SDK' : 'Mode: browser';
     if (!status.supports_web_browser) {
-      setMessage('Web browser capture is not enabled for this camera configuration.');
+      setMessage('Web browser capture is not enabled for this camera configuration.', 'error');
     }
     if (status.mode === 'manual_upload') {
       mediaTypeSelect.value = 'insta360';
@@ -103,7 +117,7 @@ async function loadCameraStatus() {
   } catch (error) {
     nativeCameraMode.textContent = 'Camera mode: unavailable';
     captureModePill.textContent = 'Mode: browser';
-    setMessage(`Camera status unavailable: ${error.message}`);
+    setMessage(`Camera status unavailable: ${error.message}`, 'error');
   }
 }
 
@@ -113,6 +127,7 @@ function updateHeadingReadout(value) {
   const cardinal = cardinals[Math.round(heading / 45) % 8];
   headingReadout.value = `${heading}\u00B0 ${cardinal}`;
   mapDot.style.transform = `translate(-50%, -50%) rotate(${heading}deg)`;
+  syncLiveContext();
 }
 
 function buildHeaders(options = {}) {
@@ -152,6 +167,8 @@ async function apiRequest(path, options = {}) {
 }
 
 function setMapPositionFromClick(event) {
+  if (event.target.closest('#use-location-btn')) return;
+
   const rect = mapSurface.getBoundingClientRect();
   const x = Math.min(Math.max(event.clientX - rect.left, 0), rect.width);
   const y = Math.min(Math.max(event.clientY - rect.top, 0), rect.height);
@@ -161,35 +178,36 @@ function setMapPositionFromClick(event) {
   const latitude = 5.6037 + (0.0018 * (0.5 - ratioY));
   const longitude = -0.1870 + (0.0028 * (ratioX - 0.5));
 
-  document.getElementById('latitude').value = latitude.toFixed(4);
-  document.getElementById('longitude').value = longitude.toFixed(4);
+  latitudeInput.value = latitude.toFixed(4);
+  longitudeInput.value = longitude.toFixed(4);
   mapDot.style.left = `${ratioX * 100}%`;
   mapDot.style.top = `${ratioY * 100}%`;
-  setMessage('Location pinned on the map.');
+  syncLiveContext();
+  setMessage('Location pinned on the map.', 'success');
 }
 
 function setCurrentLocation() {
   if (!navigator.geolocation) {
-    setMessage('This phone browser does not support GPS location lookup.');
+    setMessage('This phone browser does not support GPS location lookup.', 'error');
     return;
   }
 
-  setMessage('Finding your current location...');
+  setMessage('Finding your current location...', 'loading');
   navigator.geolocation.getCurrentPosition(
     (position) => {
       const latitude = position.coords.latitude;
       const longitude = position.coords.longitude;
-      document.getElementById('latitude').value = latitude.toFixed(5);
-      document.getElementById('longitude').value = longitude.toFixed(5);
-      const rect = mapSurface.getBoundingClientRect();
+      latitudeInput.value = latitude.toFixed(5);
+      longitudeInput.value = longitude.toFixed(5);
       const ratioX = ((longitude + 0.24) / 0.02) * 0.8 + 0.1;
       const ratioY = (0.6 - ((latitude - 5.55) / 0.02) * 0.8);
       mapDot.style.left = `${Math.min(Math.max(ratioX * 100, 0), 100)}%`;
       mapDot.style.top = `${Math.min(Math.max(ratioY * 100, 0), 100)}%`;
-      setMessage('Current location loaded successfully.');
+      syncLiveContext();
+      setMessage('Current location loaded successfully.', 'success');
     },
     () => {
-      setMessage('Location permission was blocked. You can still tap the map to set the location manually.');
+      setMessage('Location permission was blocked. You can still tap the map to set the location manually.', 'permission');
     },
     { enableHighAccuracy: true, timeout: 15000 }
   );
@@ -236,7 +254,7 @@ async function loadProjects() {
   } catch (error) {
     select.innerHTML = '<option>Unable to load projects</option>';
     recent.innerHTML = '<strong>Could not load recent pins.</strong>';
-    setMessage(`Error: ${error.message}`);
+    setMessage(`Error: ${error.message}`, 'error');
   }
 }
 
@@ -260,28 +278,30 @@ async function loadRecentPins(projectId) {
       .join('')}</ul>`;
   } catch (error) {
     recent.innerHTML = '<strong>Unable to load recent pins.</strong>';
-    setMessage(`Error: ${error.message}`);
+    setMessage(`Error: ${error.message}`, 'error');
   }
 }
 
 async function capturePin() {
   const projectId = document.getElementById('project-select').value;
-  const latitude = document.getElementById('latitude').value;
-  const longitude = document.getElementById('longitude').value;
-  const heading = document.getElementById('heading').value;
+  const latitude = latitudeInput.value;
+  const longitude = longitudeInput.value;
+  const heading = headingInput.value;
   const capturedOn = document.getElementById('captured_on').value;
   const mediaType = document.getElementById('media-type').value;
   const nativeFileKey = document.getElementById('native-file-key').value.trim();
   const thumbnailKey = document.getElementById('thumbnail-key').value.trim();
   const photoInputFile = photoInput.files && photoInput.files[0];
   const nativeUploadFile = nativeUploadInput.files && nativeUploadInput.files[0];
+  const captureButton = document.getElementById('capture-btn');
 
   if (!projectId || projectId === 'Create a project first') {
-    setMessage('Create a project first before capturing a pin.');
+    setMessage('Create a project first before capturing a pin.', 'error');
     return;
   }
 
-  setMessage('Saving pin...');
+  captureButton.disabled = true;
+  setMessage('Saving pin...', 'loading');
 
   try {
     const pin = await apiRequest(`/projects/${projectId}/pins`, {
@@ -300,41 +320,53 @@ async function capturePin() {
     });
 
     if (photoInputFile) {
-      setMessage('Uploading media...');
+      setMessage('Uploading media...', 'loading');
       const formData = new FormData();
       formData.append('file', photoInputFile);
       const upload = await apiRequest(`/projects/${projectId}/pins/${pin.id}/upload`, { method: 'POST', body: formData });
       pin.photo_key = upload.photo_key;
-      setMessage(`Pin saved and uploaded: ${upload.photo_key}`);
+      setMessage(`Pin saved and uploaded: ${upload.photo_key}`, 'success');
     }
 
     if (nativeUploadFile) {
-      setMessage('Uploading native 360 capture...');
+      setMessage('Uploading native 360 capture...', 'loading');
       const formData = new FormData();
       formData.append('file', nativeUploadFile);
       const nativeUpload = await apiRequest(`/projects/${projectId}/pins/${pin.id}/native-upload`, { method: 'POST', body: formData });
       pin.native_file_key = nativeUpload.native_file_key;
-      setMessage(`Pin saved with native capture: ${nativeUpload.native_file_key}`);
+      setMessage(`Pin saved with native capture: ${nativeUpload.native_file_key}`, 'success');
     } else if (!photoInputFile) {
-      setMessage(`Pin saved without a file: ${pin.id}`);
+      setMessage(`Pin saved without a file: ${pin.id}`, 'success');
     }
 
-    await loadRecentPins(projectId);
+    try {
+      await loadRecentPins(projectId);
+    } catch {
+      /* Pin save already succeeded; recent-list refresh is best-effort. */
+    }
   } catch (error) {
-    setMessage(`Unable to capture pin: ${error.message}`);
+    setMessage(`Unable to capture pin: ${error.message}`, 'error');
+  } finally {
+    captureButton.disabled = false;
   }
 }
 
 mapSurface.addEventListener('click', setMapPositionFromClick);
 headingInput.addEventListener('input', (event) => updateHeadingReadout(event.target.value));
+latitudeInput.addEventListener('input', syncLiveContext);
+longitudeInput.addEventListener('input', syncLiveContext);
 photoInput.addEventListener('change', (event) => renderPhotoPreview(event.target.files?.[0] || null));
 nativeUploadInput.addEventListener('change', (event) => renderNativeUploadPreview(event.target.files?.[0] || null));
-useLocationButton.addEventListener('click', setCurrentLocation);
+useLocationButton.addEventListener('click', (event) => {
+  event.stopPropagation();
+  setCurrentLocation();
+});
 document.getElementById('capture-btn').addEventListener('click', capturePin);
 document.getElementById('project-select').addEventListener('change', (event) => loadRecentPins(event.target.value));
 
 document.getElementById('captured_on').value = new Date().toISOString().slice(0, 10);
 updateHeadingReadout(headingInput.value);
+syncLiveContext();
 renderNativeUploadPreview(null);
 loadCameraStatus();
 loadProjects();

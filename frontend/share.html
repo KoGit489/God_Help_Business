@@ -5,16 +5,146 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>CASAI Shared Review</title>
     <link rel="icon" href="assets/logo.png" type="image/png" />
-    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="styles.css?v=5" />
     <style>
-      .app-shell { max-width: 760px; }
-      .panel { margin-top: 1rem; padding: 1rem; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg); }
-      .summary-box { padding: 0.75rem; border-radius: var(--radius-md); border: 1px solid var(--border); background: var(--surface); }
-      ul { padding-left: 1.2rem; }
+      .share-shell { max-width: 780px; }
+
+      .share-hero {
+        display: grid;
+        gap: 0.35rem;
+        margin-bottom: 1rem;
+      }
+
+      .share-hero h2 {
+        margin: 0;
+        font-size: 1.35rem;
+      }
+
+      .share-stats {
+        display: grid;
+        gap: 0.55rem;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        margin-bottom: 1rem;
+      }
+
+      .share-stat {
+        padding: 0.75rem 0.8rem;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        background: var(--bg-elevated);
+      }
+
+      .share-stat .label {
+        display: block;
+        margin-bottom: 0.25rem;
+        font-size: 0.72rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--muted);
+      }
+
+      .share-stat strong,
+      .share-stat span {
+        font-family: var(--font-mono);
+        font-size: 0.95rem;
+        font-weight: 600;
+        color: var(--ink);
+      }
+
+      .share-panel {
+        padding: 0.9rem;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        background: var(--bg-elevated);
+      }
+
+      .share-panel h3 {
+        display: flex;
+        align-items: center;
+        gap: 0.35rem;
+        margin: 0 0 0.65rem;
+        font-size: 0.95rem;
+      }
+
+      #pins {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        gap: 0.55rem;
+      }
+
+      #pins > li {
+        margin: 0;
+        padding: 0.75rem;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        background: var(--surface);
+      }
+
+      #pins .pin-top {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 0.35rem 0.75rem;
+      }
+
+      #pins .pin-meta {
+        margin-top: 0.25rem;
+        font-size: 0.85rem;
+        color: var(--ink-soft);
+      }
+
+      #pins .coord {
+        color: var(--muted);
+        font-family: var(--font-mono);
+        font-size: 0.8rem;
+      }
+
+      .share-actions {
+        margin-top: 1rem;
+        display: grid;
+        gap: 0.55rem;
+      }
+
+      .share-actions .primary {
+        width: 100%;
+      }
+
+      #share-feedback {
+        min-height: 1.2rem;
+        font-size: 0.85rem;
+        color: var(--muted);
+      }
+
+      #share-feedback.is-success { color: var(--success); }
+      #share-feedback.is-error { color: var(--danger); }
+
+      .status-chip {
+        display: inline-flex;
+        align-items: center;
+        width: fit-content;
+        padding: 0.2rem 0.5rem;
+        border-radius: var(--radius-sm);
+        border: 1px solid #f0d4a8;
+        background: var(--accent-tint);
+        color: var(--accent-dark);
+        font-size: 0.72rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+      }
+
+      @media (max-width: 560px) {
+        .share-stats { grid-template-columns: 1fr; }
+      }
     </style>
   </head>
   <body>
-    <div class="app-shell">
+    <a class="skip-link" href="#main">Skip to content</a>
+    <div class="app-shell share-shell">
       <header class="site-header">
         <div class="brand">
           <img class="brand-logo" src="assets/logo.png" alt="CASAI logo" />
@@ -23,22 +153,49 @@
             <h1>Shared review</h1>
           </div>
         </div>
-        <span class="pill">Shared project review</span>
+        <span class="badge">Public</span>
       </header>
-      <div class="card">
-      <h2 id="title">Loading shared project...</h2>
-      <p id="description" class="muted"></p>
-      <div class="summary-grid">
-        <div class="summary-box"><strong id="status-pill">Status</strong><br /><span id="project-status">Loading...</span></div>
-        <div class="summary-box"><strong>Captures</strong><br /><span id="capture-count">0</span></div>
-        <div class="summary-box"><strong>Heading</strong><br /><span id="heading-summary">—</span></div>
-      </div>
-      <div class="panel">
-        <h2>Captured evidence</h2>
-        <ul id="pins"></ul>
-      </div>
-      <button id="copy-link-btn" class="primary" type="button" style="margin-top: 1rem; width: 100%;">Copy review link</button>
-      </div>
+
+      <main id="main" class="card stack">
+        <div class="share-hero">
+          <span class="status-chip" id="status-pill">Status</span>
+          <h2 id="title">Loading shared project...</h2>
+          <p id="description" class="muted"></p>
+        </div>
+
+        <div class="share-stats" aria-label="Project summary">
+          <div class="share-stat">
+            <span class="label">Project status</span>
+            <span id="project-status">Loading...</span>
+          </div>
+          <div class="share-stat">
+            <span class="label">Captures</span>
+            <strong id="capture-count">0</strong>
+          </div>
+          <div class="share-stat">
+            <span class="label">First heading</span>
+            <span id="heading-summary">—</span>
+          </div>
+        </div>
+
+        <section class="share-panel" aria-labelledby="evidence-heading">
+          <h3 id="evidence-heading">
+            <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-image"></use></svg>
+            Captured evidence
+          </h3>
+          <ul id="pins"></ul>
+        </section>
+
+        <div class="share-actions">
+          <button id="copy-link-btn" class="primary" type="button">
+            <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-link"></use></svg>
+            Copy review link
+          </button>
+          <p id="share-feedback" role="status" aria-live="polite"></p>
+        </div>
+      </main>
+
+      <footer class="site-footer"><a href="privacy.html">Privacy</a> · <a href="terms.html">Terms</a></footer>
     </div>
     <script src="security.js?v=2"></script>
     <script>
@@ -72,6 +229,12 @@
       const params = new URLSearchParams(window.location.search);
       const token = params.get('token') || window.location.pathname.split('/').pop();
 
+      function setFeedback(message, kind = '') {
+        const feedback = document.getElementById('share-feedback');
+        feedback.textContent = message || '';
+        feedback.className = kind ? `is-${kind}` : '';
+      }
+
       async function apiRequest(path) {
         let lastError = null;
 
@@ -102,18 +265,22 @@
         const description = document.getElementById('description');
         const pins = document.getElementById('pins');
         const statusBox = document.getElementById('project-status');
+        const statusPill = document.getElementById('status-pill');
         const captureCount = document.getElementById('capture-count');
         const headingSummary = document.getElementById('heading-summary');
 
         if (!token) {
           title.textContent = 'This review link is missing a token.';
           description.textContent = 'Please check the shared URL.';
+          statusPill.textContent = 'Unavailable';
+          statusBox.textContent = '—';
+          pins.innerHTML = '<li class="muted">No evidence available.</li>';
           return;
         }
 
         title.textContent = 'Loading shared project...';
         description.textContent = '';
-        pins.innerHTML = '<li>Loading captured evidence...</li>';
+        pins.innerHTML = '<li class="muted">Loading captured evidence...</li>';
 
         try {
           const payload = await apiRequest(`/share/${token}`);
@@ -121,32 +288,50 @@
           title.textContent = payload.title;
           description.textContent = payload.description || 'No description provided.';
           statusBox.textContent = payload.status || 'draft';
+          statusPill.textContent = payload.status || 'draft';
           captureCount.textContent = String(payload.pins.length || 0);
           headingSummary.textContent = payload.pins.length ? `${payload.pins[0].heading || 0}°` : '—';
 
           if (!payload.pins.length) {
-            pins.innerHTML = '<li>No evidence has been captured for this project yet.</li>';
+            pins.innerHTML = '<li class="muted">No evidence has been captured for this project yet.</li>';
             return;
           }
           pins.innerHTML = payload.pins
-            .map((pin) => 
-              `<li><strong>${escapeHtml(pin.captured_on)}</strong> — heading ${escapeHtml(pin.heading || 0)}° · ${escapeHtml(pin.latitude)}, ${escapeHtml(pin.longitude)} · ${escapeHtml(pin.photo_key || pin.native_file_key || 'no media file')}</li>`
-            )
+            .map((pin) => {
+              const media = pin.photo_key || pin.native_file_key || 'no media file';
+              const mediaTag = pin.native_file_key || pin.media_type === 'insta360'
+                ? '<span class="badge">360</span>'
+                : `<span class="badge">${escapeHtml(pin.media_type || 'photo')}</span>`;
+              return `<li>
+                <div class="pin-top">
+                  <strong>${escapeHtml(pin.captured_on)}</strong>
+                  ${mediaTag}
+                </div>
+                <div class="pin-meta">Heading ${escapeHtml(pin.heading || 0)}°</div>
+                <div class="pin-meta coord">${escapeHtml(pin.latitude)}, ${escapeHtml(pin.longitude)}</div>
+                <div class="pin-meta coord">${escapeHtml(media)}</div>
+              </li>`;
+            })
             .join('');
         } catch (error) {
           const unavailable = /not found|404|invalid share token|share link/i.test(error.message || '');
           title.textContent = unavailable ? 'This review link is not available.' : 'Unable to load shared project.';
           description.textContent = unavailable ? 'The shared link is invalid or expired.' : error.message;
-          pins.innerHTML = '<li>No evidence available.</li>';
+          statusPill.textContent = 'Unavailable';
+          statusBox.textContent = '—';
+          captureCount.textContent = '0';
+          headingSummary.textContent = '—';
+          pins.innerHTML = '<li class="muted">No evidence available.</li>';
+          setFeedback(unavailable ? 'Invalid or expired share link.' : error.message, 'error');
         }
       }
 
       document.getElementById('copy-link-btn').addEventListener('click', async () => {
         try {
           await navigator.clipboard.writeText(window.location.href);
-          document.getElementById('title').textContent = 'Review link copied';
+          setFeedback('Review link copied.', 'success');
         } catch (error) {
-          document.getElementById('title').textContent = 'Review link ready';
+          setFeedback('Copy failed. Select the URL from the address bar instead.', 'error');
         }
       });
 

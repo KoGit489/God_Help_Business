@@ -5,97 +5,421 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>CASAI Account</title>
     <link rel="icon" href="assets/logo.png" type="image/png" />
-    <link rel="stylesheet" href="styles.css?v=4" />
+    <link rel="stylesheet" href="styles.css?v=5" />
     <style>
-      .auth-shell { max-width: 520px; }
-      .auth-form { display: grid; gap: 0.8rem; }
-      .auth-form[hidden], .account-panel[hidden] { display: none; }
-      .auth-status { min-height: 1.5rem; color: var(--muted); }
-      .account-panel { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border); }
-      .admin-only { margin-top: 1.25rem; }
-      [hidden] { display: none !important; }
-      .mfa-secret { display: block; overflow-wrap: anywhere; padding: 0.6rem; background: var(--bg); }
-      .mfa-codes { width: 100%; min-height: 12rem; font-family: monospace; }
+      body.auth-page {
+        background:
+          linear-gradient(180deg, var(--bg-elevated) 0%, var(--bg) 42%, var(--bg) 100%);
+      }
+
+      .auth-shell {
+        max-width: 420px;
+        padding-top: 2rem;
+      }
+
+      .auth-hero {
+        text-align: center;
+        margin-bottom: 1.25rem;
+      }
+
+      .auth-hero .brand {
+        justify-content: center;
+        margin-bottom: 0.85rem;
+      }
+
+      .auth-hero .brand-logo {
+        width: 56px;
+        height: 56px;
+      }
+
+      .auth-hero h1 {
+        font-size: 1.45rem;
+        margin: 0 0 0.25rem;
+      }
+
+      .auth-hero p {
+        margin: 0;
+        font-size: 0.92rem;
+      }
+
+      .auth-card {
+        padding: 1.25rem 1.2rem 1.35rem;
+      }
+
+      .auth-form {
+        display: grid;
+        gap: 0.85rem;
+      }
+
+      .auth-form[hidden],
+      .account-panel[hidden] {
+        display: none;
+      }
+
+      .auth-actions {
+        display: grid;
+        gap: 0.55rem;
+      }
+
+      .auth-actions .primary {
+        width: 100%;
+      }
+
+      .auth-links {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem 1.1rem;
+        font-size: 0.875rem;
+        font-weight: 600;
+      }
+
+      .auth-links a {
+        color: var(--ink-soft);
+        text-decoration: underline;
+        text-underline-offset: 2px;
+      }
+
+      .auth-links a:hover {
+        color: var(--accent-dark);
+      }
+
+      .auth-status {
+        min-height: 1.35rem;
+        margin-top: 0.85rem;
+        padding: 0.55rem 0.7rem;
+        border-radius: var(--radius-md);
+        border: 1px solid transparent;
+        font-size: 0.875rem;
+        color: var(--muted);
+      }
+
+      .auth-status:empty {
+        display: none;
+      }
+
+      .auth-status.is-loading {
+        border-color: var(--border);
+        background: var(--bg-elevated);
+        color: var(--ink-soft);
+      }
+
+      .auth-status.is-success {
+        border-color: #a7d9bf;
+        background: var(--success-tint);
+        color: #145c3a;
+      }
+
+      .auth-status.is-error {
+        border-color: #f0b4ae;
+        background: var(--danger-tint);
+        color: #7a1a14;
+      }
+
+      .mfa-reveal {
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        background: var(--bg-elevated);
+        padding: 0.15rem 0.7rem 0.15rem;
+      }
+
+      .mfa-reveal[open] {
+        padding-bottom: 0.7rem;
+      }
+
+      .mfa-reveal summary {
+        cursor: pointer;
+        list-style: none;
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        min-height: 40px;
+        font-size: 0.82rem;
+        font-weight: 600;
+        color: var(--ink-soft);
+        user-select: none;
+      }
+
+      .mfa-reveal summary::-webkit-details-marker {
+        display: none;
+      }
+
+      .mfa-reveal summary::after {
+        content: "";
+        margin-left: auto;
+        width: 0.45rem;
+        height: 0.45rem;
+        border-right: 2px solid var(--muted);
+        border-bottom: 2px solid var(--muted);
+        transform: rotate(45deg);
+        transition: transform 0.12s ease;
+      }
+
+      .mfa-reveal[open] summary::after {
+        transform: rotate(225deg);
+      }
+
+      .mfa-reveal .mfa-body {
+        display: grid;
+        gap: 0.45rem;
+        padding-top: 0.15rem;
+      }
+
+      .account-panel {
+        display: grid;
+        gap: 1rem;
+      }
+
+      .account-identity {
+        display: grid;
+        gap: 0.2rem;
+        padding-bottom: 0.85rem;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .account-identity p {
+        margin: 0;
+      }
+
+      .account-section {
+        display: grid;
+        gap: 0.7rem;
+        padding-top: 0.15rem;
+      }
+
+      .account-section h2 {
+        font-size: 0.95rem;
+        margin: 0;
+      }
+
+      .account-section + .account-section {
+        border-top: 1px solid var(--border);
+        padding-top: 1rem;
+      }
+
+      .admin-only {
+        margin-top: 0;
+      }
+
+      .danger-zone {
+        border-top: 1px solid var(--border);
+        padding-top: 1rem;
+      }
+
+      .danger-zone .muted {
+        font-size: 0.85rem;
+      }
+
+      [hidden] {
+        display: none !important;
+      }
+
+      .mfa-secret {
+        display: block;
+        overflow-wrap: anywhere;
+        padding: 0.65rem 0.7rem;
+        background: var(--bg-elevated);
+        border: 1px solid var(--border);
+        font-family: var(--font-mono);
+        font-size: 0.85rem;
+        border-radius: var(--radius-sm);
+      }
+
+      .mfa-codes {
+        width: 100%;
+        min-height: 12rem;
+        font-family: var(--font-mono);
+        font-size: 0.85rem;
+      }
+
+      .mfa-toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+      }
+
+      .site-header.auth-top {
+        margin-bottom: 0.5rem;
+      }
+
+      .site-header.auth-top .brand-text h1 {
+        font-size: 1rem;
+      }
+
+      @media (max-width: 480px) {
+        .auth-shell {
+          padding-top: 1rem;
+        }
+
+        .auth-card {
+          padding: 1.1rem 1rem 1.2rem;
+        }
+      }
     </style>
   </head>
-  <body>
-    <main class="app-shell auth-shell">
-      <header class="site-header">
+  <body class="auth-page">
+    <a class="skip-link" href="#main">Skip to content</a>
+    <main id="main" class="app-shell auth-shell">
+      <header class="site-header auth-top">
         <div class="brand">
           <img class="brand-logo" src="assets/logo.png" alt="CASAI logo" />
-          <div class="brand-text"><span class="eyebrow">CASAI / Draft 2</span><h1>Account access</h1></div>
+          <div class="brand-text">
+            <span class="eyebrow">CASAI</span>
+            <h1>Account</h1>
+          </div>
         </div>
-        <a href="index.html"><button class="quiet" type="button">Dashboard</button></a>
+        <nav class="site-nav" aria-label="Primary">
+          <a class="nav-link" href="index.html">
+            <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-home"></use></svg>
+            Projects
+          </a>
+        </nav>
       </header>
-      <section class="card stack">
-        <h2>Sign in</h2>
+
+      <div class="auth-hero" aria-hidden="false">
+        <h1 id="auth-heading">Sign in</h1>
+        <p class="muted">Field capture access for your projects.</p>
+      </div>
+
+      <section class="card auth-card stack" aria-labelledby="auth-heading">
         <form id="login-form" class="auth-form">
-          <label>Email<input id="login-email" type="email" autocomplete="username" maxlength="254" required /></label>
-          <label>Password<input id="login-password" type="password" autocomplete="current-password" maxlength="256" required /></label>
-          <label>Authenticator or recovery code (if enabled)<input id="login-mfa-code" type="text" autocomplete="one-time-code" maxlength="128" /></label>
-          <small class="muted">Authenticator codes can be used once. If needed, wait for the next code.</small>
-          <button class="primary" type="submit">Sign in</button>
-          <a href="reset-password.html">Forgot password?</a>
-          <a href="verify-email.html">Verify email</a>
+          <label>Email
+            <input id="login-email" type="email" autocomplete="username" maxlength="254" required />
+          </label>
+          <label>Password
+            <input id="login-password" type="password" autocomplete="current-password" maxlength="256" required />
+          </label>
+
+          <details class="mfa-reveal">
+            <summary>
+              <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-settings"></use></svg>
+              Authenticator or recovery code
+            </summary>
+            <div class="mfa-body">
+              <label>Code (if enabled)
+                <input id="login-mfa-code" type="text" autocomplete="one-time-code" maxlength="128" />
+              </label>
+              <small class="muted">Authenticator codes can be used once. If needed, wait for the next code.</small>
+            </div>
+          </details>
+
+          <div class="auth-actions">
+            <button class="primary" type="submit">
+              <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-user"></use></svg>
+              Sign in
+            </button>
+          </div>
+          <div class="auth-links">
+            <a href="reset-password.html">Forgot password?</a>
+            <a href="verify-email.html">Verify email</a>
+          </div>
         </form>
+
         <div id="auth-status" class="auth-status" role="status" aria-live="polite"></div>
+
         <section id="account-panel" class="account-panel" hidden>
-          <h2>Signed in</h2>
-          <p><strong id="account-name"></strong><br /><span id="account-email" class="muted"></span></p>
-          <p id="account-verification" class="muted"></p>
-          <a id="account-verify-link" href="verify-email.html" hidden>Verify email</a>
-          <button id="logout-button" class="secondary" type="button">Sign out</button>
-          <section class="admin-only" aria-labelledby="mfa-heading">
+          <div class="account-identity">
+            <h2>Signed in</h2>
+            <p><strong id="account-name"></strong></p>
+            <p><span id="account-email" class="muted"></span></p>
+            <p id="account-verification" class="muted"></p>
+            <a id="account-verify-link" href="verify-email.html" hidden>Verify email</a>
+          </div>
+
+          <div class="account-section">
+            <button id="logout-button" class="secondary" type="button">
+              <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-x"></use></svg>
+              Sign out
+            </button>
+          </div>
+
+          <section class="account-section admin-only" aria-labelledby="mfa-heading">
             <h2 id="mfa-heading">Two-step sign-in</h2>
             <p id="mfa-status" class="muted" role="status" aria-live="polite"></p>
+
             <form id="mfa-setup-form" class="auth-form" hidden>
-              <label>Confirm password<input id="mfa-setup-password" type="password" autocomplete="current-password" required /></label>
+              <label>Confirm password
+                <input id="mfa-setup-password" type="password" autocomplete="current-password" required />
+              </label>
               <button type="submit" class="quiet">Set up authenticator</button>
             </form>
+
             <div id="mfa-secret-panel" hidden>
               <p>Add this key to your authenticator app as a time-based account.</p>
               <code id="mfa-secret" class="mfa-secret"></code>
               <form id="mfa-enable-form" class="auth-form">
-                <label>Authenticator code<input id="mfa-enable-code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" required /></label>
+                <label>Authenticator code
+                  <input id="mfa-enable-code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" required />
+                </label>
                 <button type="submit" class="primary">Enable two-step sign-in</button>
               </form>
             </div>
+
             <div id="mfa-recovery-panel" hidden>
               <strong>Save your recovery codes</strong>
-              <p>Each code works once. They are shown only now; store them somewhere safe.</p>
-              <label>Recovery codes<textarea id="mfa-recovery-codes" class="mfa-codes" rows="10" readonly></textarea></label>
-              <button id="mfa-copy-recovery" type="button" class="quiet">Copy recovery codes</button>
-              <button id="mfa-recovery-done" type="button" class="quiet">Done</button>
+              <p class="muted">Each code works once. They are shown only now; store them somewhere safe.</p>
+              <label>Recovery codes
+                <textarea id="mfa-recovery-codes" class="mfa-codes" rows="10" readonly></textarea>
+              </label>
+              <div class="mfa-toolbar">
+                <button id="mfa-copy-recovery" type="button" class="quiet">
+                  <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-clipboard"></use></svg>
+                  Copy recovery codes
+                </button>
+                <button id="mfa-recovery-done" type="button" class="quiet">Done</button>
+              </div>
             </div>
+
             <form id="mfa-disable-form" class="auth-form" hidden>
-              <label>Confirm password<input id="mfa-disable-password" type="password" autocomplete="current-password" required /></label>
-              <label>Authenticator or recovery code<input id="mfa-disable-code" type="text" autocomplete="one-time-code" maxlength="128" required /></label>
+              <label>Confirm password
+                <input id="mfa-disable-password" type="password" autocomplete="current-password" required />
+              </label>
+              <label>Authenticator or recovery code
+                <input id="mfa-disable-code" type="text" autocomplete="one-time-code" maxlength="128" required />
+              </label>
               <button type="submit" class="quiet">Turn off two-step sign-in</button>
             </form>
           </section>
-          <form id="create-user-form" class="auth-form admin-only" hidden>
+
+          <form id="create-user-form" class="auth-form account-section admin-only" hidden>
             <h2>Create account</h2>
-            <label>Name<input id="new-user-name" autocomplete="name" required maxlength="128" /></label>
-            <label>Email<input id="new-user-email" type="email" autocomplete="off" required maxlength="254" /></label>
-            <label>Temporary password<input id="new-user-password" type="password" autocomplete="new-password" minlength="12" maxlength="256" required /></label>
+            <label>Name
+              <input id="new-user-name" autocomplete="name" required maxlength="128" />
+            </label>
+            <label>Email
+              <input id="new-user-email" type="email" autocomplete="off" required maxlength="254" />
+            </label>
+            <label>Temporary password
+              <input id="new-user-password" type="password" autocomplete="new-password" minlength="12" maxlength="256" required />
+            </label>
             <label><input id="new-user-admin" type="checkbox" /> Administrator</label>
             <button class="primary" type="submit">Create account</button>
           </form>
-          <div class="admin-only">
-            <button id="delete-account-toggle" class="quiet" type="button">Delete account</button>
+
+          <div class="admin-only danger-zone">
+            <button id="delete-account-toggle" class="quiet" type="button">
+              <svg class="icon" aria-hidden="true"><use href="icons.svg#icon-trash"></use></svg>
+              Delete account
+            </button>
             <form id="delete-account-form" class="auth-form" hidden>
               <p class="muted">Accounts that own projects and the last administrator cannot be deleted here.</p>
-              <label>Confirm password<input id="delete-account-password" type="password" autocomplete="current-password" required /></label>
-              <label id="delete-account-mfa-label" hidden>Authenticator or recovery code<input id="delete-account-mfa-code" type="text" autocomplete="one-time-code" maxlength="128" /></label>
-              <button type="submit" class="secondary">Confirm account deletion</button>
+              <label>Confirm password
+                <input id="delete-account-password" type="password" autocomplete="current-password" required />
+              </label>
+              <label id="delete-account-mfa-label" hidden>Authenticator or recovery code
+                <input id="delete-account-mfa-code" type="text" autocomplete="one-time-code" maxlength="128" />
+              </label>
+              <button type="submit" class="danger">Confirm account deletion</button>
               <button id="delete-account-cancel" type="button" class="quiet">Cancel</button>
             </form>
           </div>
         </section>
       </section>
-      <footer style="margin-top: 1rem;"><a href="privacy.html">Privacy</a> | <a href="terms.html">Terms</a></footer>
+
+      <footer class="site-footer">
+        <a href="privacy.html">Privacy</a> · <a href="terms.html">Terms</a>
+      </footer>
     </main>
     <script src="security.js?v=2"></script>
-    <script src="login.js?v=4"></script>
+    <script src="login.js?v=5"></script>
   </body>
 </html>

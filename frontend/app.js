@@ -102,19 +102,11 @@ function showOnboarding(stage) {
   action.href = stage === 'create' ? '#create-project' : 'floorplan.html';
 }
 
-function setDashboardMessage(message) {
-  const existing = document.getElementById('dashboard-message');
-  if (existing) {
-    existing.textContent = message;
-    return;
-  }
-
-  const messageBox = document.createElement('p');
-  messageBox.id = 'dashboard-message';
-  messageBox.style.marginTop = '0.75rem';
-  messageBox.style.color = '#475569';
+function setDashboardMessage(message, kind = '') {
+  const messageBox = document.getElementById('dashboard-message');
+  if (!messageBox) return;
   messageBox.textContent = message;
-  document.querySelector('.card').appendChild(messageBox);
+  messageBox.className = kind ? `is-${kind}` : '';
 }
 
 function redirectToLogin() {
@@ -155,28 +147,28 @@ async function apiRequest(path, options = {}) {
 }
 
 async function loadUser() {
-  setDashboardMessage('Loading user...');
+  setDashboardMessage('Loading user...', 'loading');
   try {
     const user = await apiRequest('/auth/me');
     document.getElementById('user-name').textContent = user.name;
     document.getElementById('user-email').textContent = user.email;
-    setDashboardMessage('User loaded.');
+    setDashboardMessage('Ready.', 'success');
     initializeAnalytics(user.is_admin);
   } catch (error) {
     document.getElementById('user-name').textContent = 'Unavailable';
     document.getElementById('user-email').textContent = '';
-    setDashboardMessage(`Unable to load user: ${error.message}`);
+    setDashboardMessage(`Unable to load user: ${error.message}`, 'error');
   }
 }
 
 async function loadProjects() {
-  list.innerHTML = '<li>Loading projects...</li>';
+  list.innerHTML = '<li class="muted">Loading projects...</li>';
   try {
     const projects = await apiRequest('/projects');
 
     if (!projects.length) {
       showOnboarding('create');
-      list.innerHTML = '<li>No projects yet.</li>';
+      list.innerHTML = '<li class="muted">No projects yet. Create one to start capture.</li>';
       projectCount.textContent = '0';
       pinCount.textContent = '0';
       reviewReady.textContent = '0';
@@ -194,13 +186,25 @@ async function loadProjects() {
     list.innerHTML = '';
     projects.forEach((project) => {
       const item = document.createElement('li');
-      item.innerHTML = `<strong>${escapeHtml(project.title)}</strong> — ${escapeHtml(project.description || 'No description')} <span>(${escapeHtml(project.pin_count)} pins)</span> · <span>Status: ${escapeHtml(project.status)}</span> · <a href="review.html">Review</a>`;
+      const ready = project.status === 'ready_for_review';
+      item.className = 'project-row';
+      item.innerHTML = `
+        <div class="project-row-top">
+          <strong>${escapeHtml(project.title)}</strong>
+          <span class="status-chip${ready ? ' is-ready' : ''}">${escapeHtml(project.status)}</span>
+        </div>
+        <div class="project-meta">${escapeHtml(project.description || 'No description')} · <span class="coord">${escapeHtml(project.pin_count)} pins</span></div>
+        <div class="project-actions">
+          <a class="primary-action" href="map.html">Capture</a>
+          <a href="floorplan.html">Floor plan</a>
+          <a href="review.html">Review</a>
+        </div>`;
       list.appendChild(item);
     });
-    setDashboardMessage('Projects loaded.');
+    setDashboardMessage('Projects loaded.', 'success');
   } catch (error) {
-    list.innerHTML = '<li>Unable to load projects.</li>';
-    setDashboardMessage(`Error loading projects: ${error.message}`);
+    list.innerHTML = '<li class="muted">Unable to load projects.</li>';
+    setDashboardMessage(`Error loading projects: ${error.message}`, 'error');
   }
 }
 
@@ -209,11 +213,11 @@ async function createProject(event) {
   const title = document.getElementById('title').value.trim();
   const description = document.getElementById('description').value.trim();
   if (!title) {
-    setDashboardMessage('Project title is required.');
+    setDashboardMessage('Project title is required.', 'error');
     return;
   }
 
-  setDashboardMessage('Creating project...');
+  setDashboardMessage('Creating project...', 'loading');
   const submitButton = document.querySelector('#project-form button[type="submit"]');
   submitButton.disabled = true;
   try {
@@ -226,21 +230,21 @@ async function createProject(event) {
     trackAnalytics('project_created');
     document.getElementById('project-form').reset();
     showOnboardingNext = firstProject;
-    setDashboardMessage('Project created.');
+    setDashboardMessage('Project created.', 'success');
     await loadProjects();
   } catch (error) {
-    setDashboardMessage(`Unable to create project: ${error.message}`);
+    setDashboardMessage(`Unable to create project: ${error.message}`, 'error');
   } finally {
     submitButton.disabled = false;
   }
 }
 
 async function addSamplePin() {
-  setDashboardMessage('Adding demo pin...');
+  setDashboardMessage('Adding demo pin...', 'loading');
   try {
     const projects = await apiRequest('/projects');
     if (!projects.length) {
-      setDashboardMessage('Create a project before adding a demo pin.');
+      setDashboardMessage('Create a project before adding a demo pin.', 'error');
       return;
     }
 
@@ -257,10 +261,10 @@ async function addSamplePin() {
       }),
     });
 
-    setDashboardMessage('Demo pin added.');
+    setDashboardMessage('Demo pin added.', 'success');
     await loadProjects();
   } catch (error) {
-    setDashboardMessage(`Unable to add demo pin: ${error.message}`);
+    setDashboardMessage(`Unable to add demo pin: ${error.message}`, 'error');
   }
 }
 
