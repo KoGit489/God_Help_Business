@@ -306,6 +306,7 @@
             <a href="reset-password.html">Forgot password?</a>
             <a href="verify-email.html">Verify email</a>
           </div>
+          <div class="auth-links">Don't have an account? <a href="register.html">Create account</a></div>
         </form>
 
         <div id="auth-status" class="auth-status" role="status" aria-live="polite"></div>
@@ -374,20 +375,9 @@
             </form>
           </section>
 
-          <form id="create-user-form" class="auth-form account-section admin-only" hidden>
-            <h2>Create account</h2>
-            <label>Name
-              <input id="new-user-name" autocomplete="name" required maxlength="128" />
-            </label>
-            <label>Email
-              <input id="new-user-email" type="email" autocomplete="off" required maxlength="254" />
-            </label>
-            <label>Temporary password
-              <input id="new-user-password" type="password" autocomplete="new-password" minlength="12" maxlength="256" required />
-            </label>
-            <label><input id="new-user-admin" type="checkbox" /> Administrator</label>
-            <button class="primary" type="submit">Create account</button>
-          </form>
+          <div id="create-user-link" class="account-section admin-only" hidden>
+            <a href="register.html" class="nav-link">Create account</a>
+          </div>
 
           <div class="admin-only danger-zone">
             <button id="delete-account-toggle" class="quiet" type="button">
@@ -414,6 +404,6 @@
       </footer>
     </main>
     <script src="security.js?v=2"></script>
-    <script src="login.js?v=5"></script>
+    <script src="login.js?v=6"></script>
   </body>
 </html>

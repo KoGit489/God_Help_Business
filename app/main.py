@@ -434,6 +434,13 @@ class AuthUserCreateRequest(BaseModel):
     is_admin: bool = False
 
 
+class AuthRegistrationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    email: str = Field(min_length=3, max_length=254)
+    name: str = Field(min_length=1, max_length=128)
+    password: str = Field(min_length=12, max_length=256)
+
+
 class AuthPasswordRequest(BaseModel):
     password: str = Field(min_length=1, max_length=256)
     mfa_code: str | None = Field(default=None, max_length=128)
@@ -1814,6 +1821,63 @@ def delete_current_account(payload: AuthPasswordRequest, request: Request, respo
     _clear_login_session(response)
     response.status_code = 204
     return response
+
+
+@app.get("/auth/registration", tags=["auth"])
+def registration_availability() -> dict[str, bool]:
+    if not AUTH_REQUIRED or not ALLOW_ACCOUNT_REGISTRATION or not EMAIL_VERIFICATION_REQUIRED:
+        return {"available": False}
+    try:
+        _password_reset_mail_settings()
+    except HTTPException:
+        return {"available": False}
+    return {"available": True}
+
+
+@app.post("/auth/register", status_code=202, tags=["auth"])
+def register_account(payload: AuthRegistrationRequest, background_tasks: BackgroundTasks) -> dict[str, str]:
+    if not AUTH_REQUIRED or not ALLOW_ACCOUNT_REGISTRATION:
+        raise HTTPException(status_code=403, detail="Account registration is unavailable. Contact an administrator.")
+    if not EMAIL_VERIFICATION_REQUIRED:
+        raise HTTPException(status_code=503, detail="Account registration is unavailable. Contact an administrator.")
+    email = _validate_account_email(payload.email)
+    account_key = hashlib.sha256(email.encode("utf-8")).hexdigest()
+    if not login_limiter.hit(LOGIN_GLOBAL_LIMIT, "registration-global") or not login_limiter.hit(LOGIN_ACCOUNT_LIMIT, "registration-account", account_key):
+        raise HTTPException(status_code=429, detail="Too many requests. Please wait a minute and try again.", headers={"Retry-After": "60"})
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="Name cannot be blank.")
+    settings = _password_reset_mail_settings()
+    password_hash = password_hasher.hash(payload.password)
+    token = secrets.token_urlsafe(32)
+    token_hash = _session_token_hash(token)
+    expires_at = _utc_now() + timedelta(hours=24)
+    user_data = {
+        "id": str(uuid4()), "email": email, "name": name,
+        "password_hash": password_hash, "is_admin": False, "is_active": True, "email_verified": False,
+    }
+    created = False
+    if PERSISTENCE_MODE == "database":
+        with SessionLocal() as db:
+            db.add(UserRecord(**user_data))
+            db.add(EmailVerificationRecord(token_hash=token_hash, user_id=user_data["id"], expires_at=expires_at))
+            try:
+                db.commit()
+                created = True
+            except IntegrityError:
+                db.rollback()
+                if not db.scalar(select(UserRecord.id).where(UserRecord.email == email)):
+                    raise
+    else:
+        with account_mutation_lock:
+            if email not in users_by_email:
+                users_by_email[email] = user_data
+                users_by_id[user_data["id"]] = user_data
+                email_verifications_by_token_hash[token_hash] = {"user_id": user_data["id"], "expires_at": expires_at}
+                created = True
+    if created:
+        background_tasks.add_task(_send_verification_email, settings, email, token)
+    return {"message": "If registration is available for this email, check your inbox for a verification link."}
 
 
 @app.post("/auth/users", response_model=AuthUserResponse, status_code=201, tags=["auth"])
